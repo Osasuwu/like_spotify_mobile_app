@@ -44,9 +44,7 @@ Flutter Android application that listens for headset/media button signals in a f
 
 ```bash
 flutter pub get
-flutter run `
-	--dart-define=SPOTIFY_CLIENT_ID=your_client_id `
-	--dart-define=SPOTIFY_REDIRECT_URI=likespotify://auth-callback
+flutter build apk --release --dart-define=SPOTIFY_CLIENT_ID=your_client_id --dart-define=SPOTIFY_REDIRECT_URI=likespotify://auth-callback
 ```
 
 ## Permissions and Android integration
