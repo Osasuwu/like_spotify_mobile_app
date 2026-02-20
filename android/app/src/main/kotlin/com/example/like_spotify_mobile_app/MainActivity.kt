@@ -1,5 +1,219 @@
 package com.example.like_spotify_mobile_app
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity()
+class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
+	private var eventSink: EventChannel.EventSink? = null
+	private var localReceiver: BroadcastReceiver? = null
+
+	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+		super.configureFlutterEngine(flutterEngine)
+
+		MethodChannel(
+			flutterEngine.dartExecutor.binaryMessenger,
+			AppConstants.CHANNEL_SERVICE
+		).setMethodCallHandler { call, result ->
+			when (call.method) {
+				"startService" -> {
+					startListenerService()
+					result.success(true)
+				}
+
+				"stopService" -> {
+					stopListenerService()
+					result.success(true)
+				}
+
+				"isServiceEnabled" -> {
+					val enabled = prefs().getBoolean(AppConstants.KEY_SERVICE_ENABLED, false)
+					result.success(enabled)
+				}
+
+				"setTriggerConfig" -> {
+					val pattern = call.argument<String>("pattern") ?: "pause,play"
+					val window = call.argument<Int>("windowMs")?.toLong() ?: 1000L
+					val debounce = call.argument<Int>("debounceMs")?.toLong() ?: 650L
+					prefs().edit()
+						.putString(AppConstants.KEY_PATTERN, pattern)
+						.putLong(AppConstants.KEY_WINDOW_MS, window)
+						.putLong(AppConstants.KEY_DEBOUNCE_MS, debounce)
+						.apply()
+					result.success(true)
+				}
+
+				"syncSpotifyTokens" -> {
+					val accessToken = call.argument<String>("accessToken")
+					val refreshToken = call.argument<String>("refreshToken")
+					val expiresAt = call.argument<Int>("expiresAtEpochSec")?.toLong() ?: 0L
+					val clientId = call.argument<String>("clientId")
+
+					prefs().edit()
+						.putString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, accessToken)
+						.putString(AppConstants.KEY_SPOTIFY_REFRESH_TOKEN, refreshToken)
+						.putLong(AppConstants.KEY_SPOTIFY_EXPIRES_AT, expiresAt)
+						.putString(AppConstants.KEY_SPOTIFY_CLIENT_ID, clientId)
+						.apply()
+					result.success(true)
+				}
+
+				"isIgnoringBatteryOptimizations" -> {
+					val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+					result.success(powerManager.isIgnoringBatteryOptimizations(packageName))
+				}
+
+				"openIgnoreBatteryOptimizationsSettings" -> {
+					val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+						data = Uri.parse("package:$packageName")
+					}
+					safeStart(intent)
+					result.success(true)
+				}
+
+				"openBatteryOptimizationSettings" -> {
+					safeStart(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+					result.success(true)
+				}
+
+				"openNotificationSettings" -> {
+					if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+						val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+							putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+						}
+						safeStart(intent)
+					} else {
+						val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+							data = Uri.parse("package:$packageName")
+						}
+						safeStart(intent)
+					}
+					result.success(true)
+				}
+
+				"isNotificationListenerEnabled" -> {
+					result.success(PlaybackNotificationListenerService.isEnabled(this))
+				}
+
+				"openNotificationListenerSettings" -> {
+					safeStart(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+					result.success(true)
+				}
+
+				"isMiuiDevice" -> {
+					val manufacturer = Build.MANUFACTURER.lowercase()
+					result.success(manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco"))
+				}
+
+				"openMiuiAutostartSettings" -> {
+					val intent = Intent("miui.intent.action.OP_AUTO_START").apply {
+						addCategory(Intent.CATEGORY_DEFAULT)
+					}
+					safeStart(intent)
+					result.success(true)
+				}
+
+				"isSpotifyInstalled" -> {
+					val installed = try {
+						packageManager.getPackageInfo("com.spotify.music", 0)
+						true
+					} catch (_: Exception) {
+						false
+					}
+					result.success(installed)
+				}
+
+				"openSpotify" -> {
+					val launchIntent = packageManager.getLaunchIntentForPackage("com.spotify.music")
+					if (launchIntent != null) {
+						safeStart(launchIntent)
+						result.success(true)
+					} else {
+						result.success(false)
+					}
+				}
+
+				else -> result.notImplemented()
+			}
+		}
+
+		EventChannel(flutterEngine.dartExecutor.binaryMessenger, AppConstants.CHANNEL_EVENTS)
+			.setStreamHandler(this)
+	}
+
+	override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+		eventSink = events
+		localReceiver = object : BroadcastReceiver() {
+			override fun onReceive(context: Context, intent: Intent) {
+				when (intent.action) {
+					AppConstants.ACTION_MEDIA_EVENT -> {
+						val value = intent.getStringExtra(AppConstants.EXTRA_EVENT) ?: return
+						eventSink?.success(mapOf("type" to "media", "value" to value))
+					}
+
+					AppConstants.ACTION_LOG_EVENT -> {
+						val value = intent.getStringExtra(AppConstants.EXTRA_LOG) ?: return
+						eventSink?.success(mapOf("type" to "log", "value" to value))
+					}
+
+					AppConstants.ACTION_SERVICE_STATE -> {
+						val value = intent.getBooleanExtra(AppConstants.EXTRA_ACTIVE, false)
+						eventSink?.success(mapOf("type" to "state", "value" to value))
+					}
+				}
+			}
+		}
+
+		val filter = IntentFilter().apply {
+			addAction(AppConstants.ACTION_MEDIA_EVENT)
+			addAction(AppConstants.ACTION_LOG_EVENT)
+			addAction(AppConstants.ACTION_SERVICE_STATE)
+		}
+		LocalBroadcastManager.getInstance(this).registerReceiver(localReceiver!!, filter)
+	}
+
+	override fun onCancel(arguments: Any?) {
+		localReceiver?.let {
+			LocalBroadcastManager.getInstance(this).unregisterReceiver(it)
+		}
+		localReceiver = null
+		eventSink = null
+	}
+
+	private fun startListenerService() {
+		val intent = Intent(this, MediaButtonForegroundService::class.java).apply {
+			action = MediaButtonForegroundService.ACTION_START
+		}
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+			startForegroundService(intent)
+		} else {
+			startService(intent)
+		}
+		prefs().edit().putBoolean(AppConstants.KEY_SERVICE_ENABLED, true).apply()
+	}
+
+	private fun stopListenerService() {
+		val intent = Intent(this, MediaButtonForegroundService::class.java).apply {
+			action = MediaButtonForegroundService.ACTION_STOP
+		}
+		startService(intent)
+		prefs().edit().putBoolean(AppConstants.KEY_SERVICE_ENABLED, false).apply()
+	}
+
+	private fun safeStart(intent: Intent) {
+		intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+		runCatching { startActivity(intent) }
+	}
+
+	private fun prefs() = getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
+}

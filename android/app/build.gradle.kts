@@ -39,6 +39,12 @@ android {
     }
 }
 
+dependencies {
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
+    implementation("androidx.media:media:1.7.0")
+    implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
+}
+
 flutter {
     source = "../.."
 }
