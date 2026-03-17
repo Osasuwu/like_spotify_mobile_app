@@ -11,6 +11,8 @@ class AppState {
   final bool spotifyInstalled;
   final SpotifyAuthState authState;
   final TriggerConfig triggerConfig;
+  final String archivePlaylistName;
+  final String bestOfPlaylistName;
   final List<AppLog> logs;
   final String? lastError;
 
@@ -23,6 +25,8 @@ class AppState {
     required this.spotifyInstalled,
     required this.authState,
     required this.triggerConfig,
+    required this.archivePlaylistName,
+    required this.bestOfPlaylistName,
     required this.logs,
     required this.lastError,
   });
@@ -37,6 +41,8 @@ class AppState {
       spotifyInstalled: false,
       authState: const SpotifyAuthState.disconnected(),
       triggerConfig: config,
+      archivePlaylistName: 'Discover Weekly Archive',
+      bestOfPlaylistName: 'Botbotb(Best of the best of the best)',
       logs: const <AppLog>[],
       lastError: null,
     );
@@ -51,6 +57,8 @@ class AppState {
     bool? spotifyInstalled,
     SpotifyAuthState? authState,
     TriggerConfig? triggerConfig,
+    String? archivePlaylistName,
+    String? bestOfPlaylistName,
     List<AppLog>? logs,
     String? lastError,
     bool clearError = false,
@@ -65,6 +73,8 @@ class AppState {
       spotifyInstalled: spotifyInstalled ?? this.spotifyInstalled,
       authState: authState ?? this.authState,
       triggerConfig: triggerConfig ?? this.triggerConfig,
+      archivePlaylistName: archivePlaylistName ?? this.archivePlaylistName,
+      bestOfPlaylistName: bestOfPlaylistName ?? this.bestOfPlaylistName,
       logs: logs ?? this.logs,
       lastError: clearError ? null : (lastError ?? this.lastError),
     );

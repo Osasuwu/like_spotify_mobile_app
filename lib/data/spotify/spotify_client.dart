@@ -43,7 +43,8 @@ class SpotifyClient {
         'code_challenge_method': 'S256',
         'code_challenge': codeChallenge,
         'state': state,
-        'scope': 'user-library-modify user-read-playback-state',
+        'scope':
+            'user-library-modify user-library-read user-read-playback-state user-follow-modify playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public',
       },
     );
   }

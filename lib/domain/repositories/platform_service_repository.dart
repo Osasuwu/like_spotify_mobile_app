@@ -15,6 +15,10 @@ abstract class PlatformServiceRepository {
   Future<void> openMiuiAutostartSettings();
   Future<bool> isSpotifyInstalled();
   Future<bool> openSpotify();
+  Future<void> updatePlaylistRules({
+    required String archivePlaylistName,
+    required String bestOfPlaylistName,
+  });
   Stream<Map<String, dynamic>> events();
   Future<void> syncSpotifyTokens({
     required String accessToken,

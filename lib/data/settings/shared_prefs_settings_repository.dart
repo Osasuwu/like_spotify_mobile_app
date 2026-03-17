@@ -10,6 +10,8 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
   static const _keyPattern = 'trigger_pattern';
   static const _keyWindow = 'trigger_window_ms';
   static const _keyDebounce = 'trigger_debounce_ms';
+  static const _keyArchivePlaylistName = 'archive_playlist_name';
+  static const _keyBestOfPlaylistName = 'best_of_playlist_name';
   static const _keyServiceEnabled = 'service_enabled';
   static const _keyLogs = 'logs';
 
@@ -29,6 +31,30 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
     await prefs.setString(_keyPattern, config.pattern);
     await prefs.setInt(_keyWindow, config.windowMs);
     await prefs.setInt(_keyDebounce, config.debounceMs);
+  }
+
+  @override
+  Future<String> loadArchivePlaylistName() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyArchivePlaylistName) ?? AppConstants.defaultArchivePlaylistName;
+  }
+
+  @override
+  Future<void> saveArchivePlaylistName(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyArchivePlaylistName, name.trim());
+  }
+
+  @override
+  Future<String> loadBestOfPlaylistName() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyBestOfPlaylistName) ?? AppConstants.defaultBestOfPlaylistName;
+  }
+
+  @override
+  Future<void> saveBestOfPlaylistName(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyBestOfPlaylistName, name.trim());
   }
 
   @override

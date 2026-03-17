@@ -96,6 +96,17 @@ class AndroidPlatformServiceRepository implements PlatformServiceRepository {
   }
 
   @override
+  Future<void> updatePlaylistRules({
+    required String archivePlaylistName,
+    required String bestOfPlaylistName,
+  }) async {
+    await _methodChannel.invokeMethod<void>('setPlaylistRules', <String, dynamic>{
+      'archivePlaylistName': archivePlaylistName,
+      'bestOfPlaylistName': bestOfPlaylistName,
+    });
+  }
+
+  @override
   Stream<Map<String, dynamic>> events() {
     return _eventChannel
         .receiveBroadcastStream()

@@ -15,14 +15,19 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
   late TextEditingController _pattern;
   late TextEditingController _window;
   late TextEditingController _debounce;
+  late TextEditingController _archivePlaylistName;
+  late TextEditingController _bestOfPlaylistName;
 
   @override
   void initState() {
     super.initState();
     final config = ref.read(appControllerProvider).triggerConfig;
+    final state = ref.read(appControllerProvider);
     _pattern = TextEditingController(text: config.pattern);
     _window = TextEditingController(text: config.windowMs.toString());
     _debounce = TextEditingController(text: config.debounceMs.toString());
+    _archivePlaylistName = TextEditingController(text: state.archivePlaylistName);
+    _bestOfPlaylistName = TextEditingController(text: state.bestOfPlaylistName);
   }
 
   @override
@@ -30,6 +35,8 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
     _pattern.dispose();
     _window.dispose();
     _debounce.dispose();
+    _archivePlaylistName.dispose();
+    _bestOfPlaylistName.dispose();
     super.dispose();
   }
 
@@ -61,6 +68,21 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
               decoration: const InputDecoration(labelText: 'Debounce (ms)'),
               keyboardType: TextInputType.number,
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _archivePlaylistName,
+              decoration: const InputDecoration(
+                labelText: 'Archive playlist name',
+                hintText: 'Discover Weekly Archive',
+              ),
+            ),
+            TextField(
+              controller: _bestOfPlaylistName,
+              decoration: const InputDecoration(
+                labelText: 'Best-of playlist name',
+                hintText: 'Botbotb(Best of the best of the best)',
+              ),
+            ),
             const SizedBox(height: 20),
             FilledButton(
               onPressed: () async {
@@ -70,6 +92,10 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
                   debounceMs: int.tryParse(_debounce.text.trim()) ?? 650,
                 );
                 await controller.saveTriggerConfig(config);
+                await controller.savePlaylistRules(
+                  archivePlaylistName: _archivePlaylistName.text.trim(),
+                  bestOfPlaylistName: _bestOfPlaylistName.text.trim(),
+                );
                 if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Trigger configuration saved')),

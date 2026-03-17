@@ -51,6 +51,8 @@ class AppController extends StateNotifier<AppState> {
       final config = await _settingsRepository.loadTriggerConfig();
       final serviceEnabled = await _platformServiceRepository.isServiceEnabled();
       final auth = await _musicServiceRepository.getAuthState();
+        final archivePlaylistName = await _settingsRepository.loadArchivePlaylistName();
+        final bestOfPlaylistName = await _settingsRepository.loadBestOfPlaylistName();
       final batteryIgnored =
           await _platformServiceRepository.isIgnoringBatteryOptimizations();
         final notificationListenerEnabled =
@@ -60,6 +62,10 @@ class AppController extends StateNotifier<AppState> {
       final logLines = await _settingsRepository.loadLogs();
 
       await _platformServiceRepository.updateTriggerConfig(config);
+      await _platformServiceRepository.updatePlaylistRules(
+        archivePlaylistName: archivePlaylistName,
+        bestOfPlaylistName: bestOfPlaylistName,
+      );
 
       state = state.copyWith(
         loading: false,
@@ -70,6 +76,8 @@ class AppController extends StateNotifier<AppState> {
         notificationListenerEnabled: notificationListenerEnabled,
         isMiui: isMiui,
         spotifyInstalled: spotifyInstalled,
+        archivePlaylistName: archivePlaylistName,
+        bestOfPlaylistName: bestOfPlaylistName,
         logs: logLines
             .map((line) => AppLog(at: DateTime.now().toUtc(), message: line))
             .toList(growable: false),
@@ -146,6 +154,26 @@ class AppController extends StateNotifier<AppState> {
     await _platformServiceRepository.updateTriggerConfig(config);
     state = state.copyWith(triggerConfig: config, clearError: true);
     await addLog('Trigger config updated to ${config.pattern} (${config.windowMs}ms)');
+  }
+
+  Future<void> savePlaylistRules({
+    required String archivePlaylistName,
+    required String bestOfPlaylistName,
+  }) async {
+    final archive = archivePlaylistName.trim();
+    final bestOf = bestOfPlaylistName.trim();
+    await _settingsRepository.saveArchivePlaylistName(archive);
+    await _settingsRepository.saveBestOfPlaylistName(bestOf);
+    await _platformServiceRepository.updatePlaylistRules(
+      archivePlaylistName: archive,
+      bestOfPlaylistName: bestOf,
+    );
+    state = state.copyWith(
+      archivePlaylistName: archive,
+      bestOfPlaylistName: bestOf,
+      clearError: true,
+    );
+    await addLog('Playlist rules updated');
   }
 
   Future<void> requestBatteryOptimizationExemption() async {

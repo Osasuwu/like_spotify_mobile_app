@@ -14,6 +14,9 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
+private const val DEFAULT_ARCHIVE_PLAYLIST_NAME = "Discover Weekly Archive"
+private const val DEFAULT_BEST_OF_PLAYLIST_NAME = "Botbotb(Best of the best of the best)"
+
 class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 	private var eventSink: EventChannel.EventSink? = null
 	private var localReceiver: BroadcastReceiver? = null
@@ -25,6 +28,7 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 			flutterEngine.dartExecutor.binaryMessenger,
 			AppConstants.CHANNEL_SERVICE
 		).setMethodCallHandler { call, result ->
+			ensurePlaylistRuleDefaults()
 			when (call.method) {
 				"startService" -> {
 					startListenerService()
@@ -143,6 +147,21 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 					}
 				}
 
+				"setPlaylistRules" -> {
+					val archiveName = call.argument<String>("archivePlaylistName")
+						?.takeIf { it.isNotBlank() }
+						?: DEFAULT_ARCHIVE_PLAYLIST_NAME
+					val bestOfName = call.argument<String>("bestOfPlaylistName")
+						?.takeIf { it.isNotBlank() }
+						?: DEFAULT_BEST_OF_PLAYLIST_NAME
+
+					prefs().edit()
+						.putString(AppConstants.KEY_ARCHIVE_PLAYLIST_NAME, archiveName)
+						.putString(AppConstants.KEY_BEST_OF_PLAYLIST_NAME, bestOfName)
+						.apply()
+					result.success(true)
+				}
+
 				else -> result.notImplemented()
 			}
 		}
@@ -216,4 +235,16 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 	}
 
 	private fun prefs() = getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
+
+	private fun ensurePlaylistRuleDefaults() {
+		val p = prefs()
+		if (p.getString(AppConstants.KEY_ARCHIVE_PLAYLIST_NAME, null) == null ||
+			p.getString(AppConstants.KEY_BEST_OF_PLAYLIST_NAME, null) == null
+		) {
+			p.edit()
+				.putString(AppConstants.KEY_ARCHIVE_PLAYLIST_NAME, DEFAULT_ARCHIVE_PLAYLIST_NAME)
+				.putString(AppConstants.KEY_BEST_OF_PLAYLIST_NAME, DEFAULT_BEST_OF_PLAYLIST_NAME)
+				.apply()
+		}
+	}
 }

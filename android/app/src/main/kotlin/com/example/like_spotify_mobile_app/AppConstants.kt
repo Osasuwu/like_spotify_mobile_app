@@ -11,6 +11,13 @@ object AppConstants {
     const val KEY_SPOTIFY_REFRESH_TOKEN = "spotify_refresh_token"
     const val KEY_SPOTIFY_EXPIRES_AT = "spotify_expires_at"
     const val KEY_SPOTIFY_CLIENT_ID = "spotify_client_id"
+    const val KEY_SPOTIFY_USER_ID = "spotify_user_id"
+
+    const val KEY_ARCHIVE_PLAYLIST_NAME = "archive_playlist_name"
+    const val KEY_BEST_OF_PLAYLIST_NAME = "best_of_playlist_name"
+    const val KEY_TRACK_LIKE_COUNTS = "track_like_counts"
+    const val KEY_ARTIST_LIKE_COUNTS = "artist_like_counts"
+    const val KEY_TRACKED_ARTIST_IDS = "tracked_artist_ids"
 
     const val ACTION_MEDIA_EVENT = "com.example.like_spotify_mobile_app.MEDIA_EVENT"
     const val ACTION_LOG_EVENT = "com.example.like_spotify_mobile_app.LOG_EVENT"

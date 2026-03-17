@@ -1,3 +1,12 @@
 {
-    "java.configuration.updateBuildConfiguration": "interactive"
+    "java.configuration.updateBuildConfiguration": "interactive",
+    "spellright.language": [
+        "en"
+    ],
+    "spellright.documentTypes": [
+        "latex",
+        "plaintext"
+    ],
+    "cmake.sourceDirectory": "C:/Users/petrk/OneDrive/GitHub/like_spotify_mobile_app/windows/flutter",
+    "FSharp.suggestGitignore": false
 }
