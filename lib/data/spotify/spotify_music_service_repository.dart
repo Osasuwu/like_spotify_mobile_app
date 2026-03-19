@@ -32,11 +32,26 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
 
   @override
   Future<SpotifyAuthState> getAuthState() async {
+    final state = await _readStoredAuthState();
+    if (!_shouldRefresh(state)) {
+      return state;
+    }
+
+    try {
+      return await _refreshAuthState(state);
+    } catch (error, stackTrace) {
+      // Keep existing state available when refresh fails (for example offline startup).
+      debugPrint('Spotify token refresh skipped in getAuthState: $error\n$stackTrace');
+      return state;
+    }
+  }
+
+  Future<SpotifyAuthState> _readStoredAuthState() async {
     final access = await _tokenStore.readAccessToken();
     final refresh = await _tokenStore.readRefreshToken();
     final expiry = await _tokenStore.readExpiryEpochSec();
 
-    if (access == null || refresh == null || expiry == null) {
+    if (refresh == null || refresh.isEmpty || expiry == null) {
       return const SpotifyAuthState.disconnected();
     }
 
@@ -44,6 +59,48 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
       accessToken: access,
       refreshToken: refresh,
       expiresAt: DateTime.fromMillisecondsSinceEpoch(expiry * 1000, isUtc: true),
+      connected: true,
+    );
+  }
+
+  bool _shouldRefresh(SpotifyAuthState state) {
+    if (!state.connected) {
+      return false;
+    }
+    final access = state.accessToken;
+    return state.isExpired || access == null || access.isEmpty;
+  }
+
+  Future<SpotifyAuthState> _refreshAuthState(SpotifyAuthState state) async {
+    final refresh = state.refreshToken;
+    if (refresh == null || refresh.isEmpty) {
+      throw Exception('Missing refresh token');
+    }
+
+    final refreshed = await _spotifyClient.refreshToken(
+      refreshToken: refresh,
+      clientId: _clientId,
+    );
+    final expiresAt = DateTime.now().toUtc().add(Duration(seconds: refreshed.expiresInSec));
+    final expiresAtEpochSec = expiresAt.millisecondsSinceEpoch ~/ 1000;
+
+    await _tokenStore.save(
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      expiresAtEpochSec: expiresAtEpochSec,
+    );
+
+    await _platformServiceRepository.syncSpotifyTokens(
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      expiresAtEpochSec: expiresAtEpochSec,
+      clientId: _clientId,
+    );
+
+    return SpotifyAuthState(
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      expiresAt: expiresAt,
       connected: true,
     );
   }
@@ -126,7 +183,7 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
   @override
   Future<void> likeCurrentTrack() async {
     await refreshIfNeeded();
-    final state = await getAuthState();
+    final state = await _readStoredAuthState();
     final accessToken = state.accessToken;
     if (accessToken == null) {
       throw Exception('Service is disconnected');
@@ -142,34 +199,11 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
 
   @override
   Future<void> refreshIfNeeded() async {
-    final state = await getAuthState();
-    if (!state.connected || !state.isExpired) {
+    final state = await _readStoredAuthState();
+    if (!_shouldRefresh(state)) {
       return;
     }
-
-    final refresh = state.refreshToken;
-    if (refresh == null || refresh.isEmpty) {
-      throw Exception('Missing refresh token');
-    }
-
-    final refreshed = await _spotifyClient.refreshToken(
-      refreshToken: refresh,
-      clientId: _clientId,
-    );
-    final expiresAt = DateTime.now().toUtc().add(Duration(seconds: refreshed.expiresInSec));
-
-    await _tokenStore.save(
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAtEpochSec: expiresAt.millisecondsSinceEpoch ~/ 1000,
-    );
-
-    await _platformServiceRepository.syncSpotifyTokens(
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAtEpochSec: expiresAt.millisecondsSinceEpoch ~/ 1000,
-      clientId: _clientId,
-    );
+    await _refreshAuthState(state);
   }
 
   Future<bool> tryHandleIncomingUri(Uri uri) async {
