@@ -18,6 +18,9 @@ object AppConstants {
     const val KEY_TRACK_LIKE_COUNTS = "track_like_counts"
     const val KEY_ARTIST_LIKE_COUNTS = "artist_like_counts"
     const val KEY_TRACKED_ARTIST_IDS = "tracked_artist_ids"
+    const val KEY_PLAYLIST_CACHE = "playlist_cache"
+    const val KEY_PLAYLIST_CACHE_TIMESTAMP = "playlist_cache_timestamp"
+    const val PLAYLIST_CACHE_TTL_MS = 12 * 60 * 60 * 1000L  // 12 hours
 
     const val ACTION_MEDIA_EVENT = "com.example.like_spotify_mobile_app.MEDIA_EVENT"
     const val ACTION_LOG_EVENT = "com.example.like_spotify_mobile_app.LOG_EVENT"

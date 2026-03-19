@@ -223,6 +223,9 @@ class SpotifyLikeWorker(
             return null
         }
 
+        // Invalidate cache before creating new playlist
+        clearPlaylistCache()
+
         val userId = currentUserId(token) ?: return null
         val connection = api(
             "https://api.spotify.com/v1/users/$userId/playlists",
@@ -246,11 +249,23 @@ class SpotifyLikeWorker(
 
         val payload = readBody(connection) ?: return null
         val playlistId = JSONObject(payload).optString("id")
+        if (playlistId.isNotBlank()) {
+            cachePlaylistId(playlistName, playlistId)
+            log("Playlist created and cached: \"$playlistName\" -> $playlistId")
+        }
         return playlistId.takeIf { it.isNotBlank() }
     }
 
     private fun findPlaylistIdByName(token: String, playlistName: String): String? {
         val needle = playlistName.trim()
+        
+        // Check cache first
+        val cached = getCachedPlaylistId(needle)
+        if (cached != null) {
+            log("Playlist search: cache hit for \"$needle\" -> $cached")
+            return cached
+        }
+        
         log("Playlist search: looking for \"$needle\" (${needle.length} chars, codepoints: ${needle.map { it.code }})")
         var offset = 0
         while (true) {
@@ -277,6 +292,7 @@ class SpotifyLikeWorker(
                     val id = playlist.optString("id")
                     if (id.isNotBlank()) {
                         log("Playlist search: found \"$name\" -> $id")
+                        cachePlaylistId(needle, id)
                         return id
                     }
                 } else if (name.contains(needle, ignoreCase = true) || needle.contains(name, ignoreCase = true)) {
@@ -419,6 +435,51 @@ class SpotifyLikeWorker(
             json.put(id, count)
         }
         prefs.edit().putString(key, json.toString()).apply()
+    }
+
+    private fun getCachedPlaylistId(playlistName: String): String? {
+        val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val cacheTimestamp = prefs.getLong(AppConstants.KEY_PLAYLIST_CACHE_TIMESTAMP, 0L)
+        
+        // Check if cache is still valid (TTL: 12 hours)
+        if (now - cacheTimestamp > AppConstants.PLAYLIST_CACHE_TTL_MS) {
+            prefs.edit().remove(AppConstants.KEY_PLAYLIST_CACHE).remove(AppConstants.KEY_PLAYLIST_CACHE_TIMESTAMP).apply()
+            return null
+        }
+        
+        val raw = prefs.getString(AppConstants.KEY_PLAYLIST_CACHE, null) ?: return null
+        return try {
+            val json = JSONObject(raw)
+            json.optString(playlistName.trim())
+                .takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun cachePlaylistId(playlistName: String, playlistId: String) {
+        val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
+        val raw = prefs.getString(AppConstants.KEY_PLAYLIST_CACHE, null)
+        val json = try {
+            if (raw != null) JSONObject(raw) else JSONObject()
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        
+        json.put(playlistName.trim(), playlistId)
+        prefs.edit()
+            .putString(AppConstants.KEY_PLAYLIST_CACHE, json.toString())
+            .putLong(AppConstants.KEY_PLAYLIST_CACHE_TIMESTAMP, System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun clearPlaylistCache() {
+        val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
+        prefs.edit()
+            .remove(AppConstants.KEY_PLAYLIST_CACHE)
+            .remove(AppConstants.KEY_PLAYLIST_CACHE_TIMESTAMP)
+            .apply()
     }
 
     private fun api(url: String, token: String, method: String): HttpURLConnection {
