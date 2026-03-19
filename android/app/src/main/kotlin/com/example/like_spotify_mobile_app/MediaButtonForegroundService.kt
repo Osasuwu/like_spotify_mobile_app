@@ -22,6 +22,7 @@ class MediaButtonForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        SpotifyLikeWorker.enqueueWeeklyArchiveSync(this)
 
         detector = MediaEventPatternDetector(
             windowMsProvider = { prefs().getLong(AppConstants.KEY_WINDOW_MS, 1000L) },
