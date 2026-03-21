@@ -62,9 +62,19 @@ class SpotifyLikeWorker(
         var trackInfo = currentTrackInfo(accessToken)
         if (trackInfo.statusCode == 401 && !refreshToken.isNullOrBlank() && !clientId.isNullOrBlank()) {
             val refreshed = refreshAccessToken(refreshToken, clientId)
-            if (!refreshed.isNullOrBlank()) {
-                accessToken = refreshed
-                prefs.edit().putString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, accessToken).apply()
+            if (refreshed != null && refreshed.accessToken.isNotBlank()) {
+                accessToken = refreshed.accessToken
+                val editor = prefs.edit()
+                    .putString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, accessToken)
+
+                if (!refreshed.refreshToken.isNullOrBlank()) {
+                    editor.putString(AppConstants.KEY_SPOTIFY_REFRESH_TOKEN, refreshed.refreshToken)
+                }
+                if (refreshed.expiresInSec != null && refreshed.expiresInSec > 0) {
+                    val expiresAtEpochSec = (System.currentTimeMillis() / 1000L) + refreshed.expiresInSec
+                    editor.putLong(AppConstants.KEY_SPOTIFY_EXPIRES_AT, expiresAtEpochSec)
+                }
+                editor.apply()
                 trackInfo = currentTrackInfo(accessToken)
             } else {
                 log("Like failed: Spotify token refresh failed")
@@ -126,9 +136,19 @@ class SpotifyLikeWorker(
         val probe = currentTrackInfo(accessToken)
         if (probe.statusCode == 401 && !refreshToken.isNullOrBlank() && !clientId.isNullOrBlank()) {
             val refreshed = refreshAccessToken(refreshToken, clientId)
-            if (!refreshed.isNullOrBlank()) {
-                accessToken = refreshed
-                prefs.edit().putString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, accessToken).apply()
+            if (refreshed != null && refreshed.accessToken.isNotBlank()) {
+                accessToken = refreshed.accessToken
+                val editor = prefs.edit()
+                    .putString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, accessToken)
+
+                if (!refreshed.refreshToken.isNullOrBlank()) {
+                    editor.putString(AppConstants.KEY_SPOTIFY_REFRESH_TOKEN, refreshed.refreshToken)
+                }
+                if (refreshed.expiresInSec != null && refreshed.expiresInSec > 0) {
+                    val expiresAtEpochSec = (System.currentTimeMillis() / 1000L) + refreshed.expiresInSec
+                    editor.putLong(AppConstants.KEY_SPOTIFY_EXPIRES_AT, expiresAtEpochSec)
+                }
+                editor.apply()
             } else {
                 log("Archive sync failed: Spotify token refresh failed")
                 return Result.success()
@@ -182,7 +202,7 @@ class SpotifyLikeWorker(
         return code in 200..299
     }
 
-    private fun refreshAccessToken(refreshToken: String, clientId: String): String? {
+    private fun refreshAccessToken(refreshToken: String, clientId: String): RefreshedToken? {
         val connection = URL("https://accounts.spotify.com/api/token").openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.doOutput = true
@@ -204,7 +224,18 @@ class SpotifyLikeWorker(
             return null
         }
         val payload = readBody(connection) ?: return null
-        return JSONObject(payload).optString("access_token")
+        val json = JSONObject(payload)
+        val access = json.optString("access_token")
+        if (access.isBlank()) {
+            return null
+        }
+        val rotatedRefresh = json.optString("refresh_token").ifBlank { null }
+        val expiresIn = if (json.has("expires_in")) json.optLong("expires_in", 0L) else 0L
+        return RefreshedToken(
+            accessToken = access,
+            refreshToken = rotatedRefresh,
+            expiresInSec = expiresIn.takeIf { it > 0L }
+        )
     }
 
     private fun removeTrackFromArchivePlaylist(trackId: String, token: String?, playlistName: String) {
@@ -685,6 +716,12 @@ class SpotifyLikeWorker(
     }
 
     data class TrackInfo(val trackId: String?, val artistIds: List<String>, val statusCode: Int)
+
+    data class RefreshedToken(
+        val accessToken: String,
+        val refreshToken: String?,
+        val expiresInSec: Long?
+    )
 
     companion object {
         private const val KEY_INPUT_MODE = "mode"
