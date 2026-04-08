@@ -20,8 +20,8 @@ object AppConstants {
     const val KEY_TRACKED_ARTIST_IDS = "tracked_artist_ids"
     const val KEY_PLAYLIST_CACHE = "playlist_cache"
     const val KEY_PLAYLIST_CACHE_TIMESTAMP = "playlist_cache_timestamp"
-    const val KEY_TRACKED_DISCOVER_WEEKLY_IDS = "tracked_discover_weekly_ids"
-    const val KEY_TRACKED_DISCOVER_WEEKLY_SYNC_AT = "tracked_discover_weekly_sync_at"
+    const val KEY_SUPABASE_URL = "supabase_url"
+    const val KEY_SUPABASE_ANON_KEY = "supabase_anon_key"
     const val PLAYLIST_CACHE_TTL_MS = 12 * 60 * 60 * 1000L  // 12 hours
 
     const val ACTION_MEDIA_EVENT = "com.example.like_spotify_mobile_app.MEDIA_EVENT"

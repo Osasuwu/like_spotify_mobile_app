@@ -8,15 +8,12 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
-import androidx.work.workDataOf
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -24,8 +21,6 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
-import java.util.Calendar
-import java.util.concurrent.TimeUnit
 
 private const val DEFAULT_ARCHIVE_PLAYLIST_NAME = "Discover Weekly Archive"
 private const val DEFAULT_BEST_OF_PLAYLIST_NAME = "Botbotb(Best of the best of the best)"
@@ -36,13 +31,9 @@ class SpotifyLikeWorker(
 ) : Worker(appContext, params) {
 
     override fun doWork(): Result {
-        if (inputData.getString(KEY_INPUT_MODE) == MODE_SYNC_ARCHIVE) {
-            return doArchiveSync()
-        }
-
         val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
         var accessToken = prefs.getString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, null)
-        val refreshToken = prefs.getString(AppConstants.KEY_SPOTIFY_REFRESH_TOKEN, null)
+        var refreshToken = prefs.getString(AppConstants.KEY_SPOTIFY_REFRESH_TOKEN, null)
         val clientId = prefs.getString(AppConstants.KEY_SPOTIFY_CLIENT_ID, null)
         val archivePlaylistName = prefs.getString(
             AppConstants.KEY_ARCHIVE_PLAYLIST_NAME,
@@ -59,8 +50,33 @@ class SpotifyLikeWorker(
             return Result.success()
         }
 
+        // Proactive token refresh: if token expires within 5 minutes, refresh before API calls
+        val expiresAt = prefs.getLong(AppConstants.KEY_SPOTIFY_EXPIRES_AT, 0L)
+        val nowSec = System.currentTimeMillis() / 1000L
+        if (expiresAt > 0 && (expiresAt - nowSec) < 300 && !refreshToken.isNullOrBlank() && !clientId.isNullOrBlank()) {
+            log("Token expires in ${expiresAt - nowSec}s, proactively refreshing...")
+            val refreshed = refreshAccessToken(refreshToken, clientId)
+            if (refreshed != null && refreshed.accessToken.isNotBlank()) {
+                accessToken = refreshed.accessToken
+                val editor = prefs.edit()
+                    .putString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, accessToken)
+                if (!refreshed.refreshToken.isNullOrBlank()) {
+                    refreshToken = refreshed.refreshToken
+                    editor.putString(AppConstants.KEY_SPOTIFY_REFRESH_TOKEN, refreshToken)
+                }
+                if (refreshed.expiresInSec != null && refreshed.expiresInSec > 0) {
+                    editor.putLong(AppConstants.KEY_SPOTIFY_EXPIRES_AT, (nowSec + refreshed.expiresInSec))
+                }
+                editor.apply()
+                log("Proactive token refresh succeeded")
+            } else {
+                log("Proactive token refresh failed, continuing with current token")
+            }
+        }
+
         var trackInfo = currentTrackInfo(accessToken)
         if (trackInfo.statusCode == 401 && !refreshToken.isNullOrBlank() && !clientId.isNullOrBlank()) {
+            log("Got 401, refreshing token...")
             val refreshed = refreshAccessToken(refreshToken, clientId)
             if (refreshed != null && refreshed.accessToken.isNotBlank()) {
                 accessToken = refreshed.accessToken
@@ -88,25 +104,22 @@ class SpotifyLikeWorker(
             return Result.success()
         }
 
-        val trackedIds = loadTrackedDiscoverWeeklyTrackIds()
-        if (trackedIds.isEmpty()) {
-            log("Like skipped: Discover Weekly snapshot is empty, waiting for scheduled sync")
-            return Result.success()
-        }
-
-        if (!trackedIds.contains(trackId)) {
-            log("Like skipped: track is not part of current Discover Weekly snapshot")
-            return Result.success()
-        }
-
+        // 1. Always like the track
         val likeResult = likeTrack(trackId, accessToken)
         playFeedbackTone(success = likeResult)
         if (likeResult) {
             log("Liked track: $trackId")
 
+            // 2. Remove from archive if present (so user doesn't re-listen)
             removeTrackFromArchivePlaylist(trackId, accessToken, archivePlaylistName)
 
-            val trackLikeCount = incrementCountMapValue(AppConstants.KEY_TRACK_LIKE_COUNTS, trackId)
+            val userId = currentUserId(accessToken)
+            val trackLikeCount = if (userId != null) {
+                supabaseIncrementTrackLike(userId, trackId)
+                    ?: incrementCountMapValue(AppConstants.KEY_TRACK_LIKE_COUNTS, trackId)
+            } else {
+                incrementCountMapValue(AppConstants.KEY_TRACK_LIKE_COUNTS, trackId)
+            }
             if (trackLikeCount == 3) {
                 addTrackToBestOfPlaylist(trackId, accessToken, bestOfPlaylistName)
             }
@@ -116,47 +129,6 @@ class SpotifyLikeWorker(
             log("Like failed for track: $trackId")
         }
         return Result.success()
-    }
-
-    private fun doArchiveSync(): Result {
-        val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
-        var accessToken = prefs.getString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, null)
-        val refreshToken = prefs.getString(AppConstants.KEY_SPOTIFY_REFRESH_TOKEN, null)
-        val clientId = prefs.getString(AppConstants.KEY_SPOTIFY_CLIENT_ID, null)
-        val archivePlaylistName = prefs.getString(
-            AppConstants.KEY_ARCHIVE_PLAYLIST_NAME,
-            DEFAULT_ARCHIVE_PLAYLIST_NAME
-        ) ?: DEFAULT_ARCHIVE_PLAYLIST_NAME
-
-        if (accessToken.isNullOrBlank()) {
-            log("Archive sync skipped: Spotify access token missing")
-            return Result.success()
-        }
-
-        val probe = currentTrackInfo(accessToken)
-        if (probe.statusCode == 401 && !refreshToken.isNullOrBlank() && !clientId.isNullOrBlank()) {
-            val refreshed = refreshAccessToken(refreshToken, clientId)
-            if (refreshed != null && refreshed.accessToken.isNotBlank()) {
-                accessToken = refreshed.accessToken
-                val editor = prefs.edit()
-                    .putString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, accessToken)
-
-                if (!refreshed.refreshToken.isNullOrBlank()) {
-                    editor.putString(AppConstants.KEY_SPOTIFY_REFRESH_TOKEN, refreshed.refreshToken)
-                }
-                if (refreshed.expiresInSec != null && refreshed.expiresInSec > 0) {
-                    val expiresAtEpochSec = (System.currentTimeMillis() / 1000L) + refreshed.expiresInSec
-                    editor.putLong(AppConstants.KEY_SPOTIFY_EXPIRES_AT, expiresAtEpochSec)
-                }
-                editor.apply()
-            } else {
-                log("Archive sync failed: Spotify token refresh failed")
-                return Result.success()
-            }
-        }
-
-        val synced = syncDiscoverWeeklySnapshot(accessToken, archivePlaylistName)
-        return if (synced) Result.success() else Result.retry()
     }
 
     private fun currentTrackInfo(token: String?): TrackInfo {
@@ -390,83 +362,6 @@ class SpotifyLikeWorker(
         }
     }
 
-    private fun syncDiscoverWeeklySnapshot(token: String, playlistName: String): Boolean {
-        val playlistId = ensurePlaylistId(token, playlistName, createIfMissing = false) ?: run {
-            log("Archive sync skipped: playlist '$playlistName' not found")
-            return false
-        }
-
-        val ids = mutableListOf<String>()
-        var offset = 0
-        while (ids.size < 30) {
-            val connection = api(
-                "https://api.spotify.com/v1/playlists/$playlistId/tracks?limit=50&offset=$offset",
-                token,
-                "GET"
-            )
-            val code = connection.responseCode
-            if (code !in 200..299) {
-                val error = readErrorBody(connection)
-                log("Archive sync failed ($code): ${error ?: "<empty>"}")
-                return false
-            }
-
-            val payload = readBody(connection) ?: return false
-            val root = JSONObject(payload)
-            val items = root.optJSONArray("items") ?: break
-            if (items.length() == 0) {
-                break
-            }
-
-            for (index in 0 until items.length()) {
-                val item = items.optJSONObject(index) ?: continue
-                val track = item.optJSONObject("track") ?: continue
-                val trackId = track.optString("id")
-                if (trackId.isNotBlank() && !ids.contains(trackId)) {
-                    ids.add(trackId)
-                    if (ids.size >= 30) {
-                        break
-                    }
-                }
-            }
-
-            if (items.length() < 50) {
-                break
-            }
-            offset += 50
-        }
-
-        val json = JSONArray()
-        ids.forEach { json.put(it) }
-
-        val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
-        prefs.edit()
-            .putString(AppConstants.KEY_TRACKED_DISCOVER_WEEKLY_IDS, json.toString())
-            .putLong(AppConstants.KEY_TRACKED_DISCOVER_WEEKLY_SYNC_AT, System.currentTimeMillis())
-            .apply()
-
-        log("Archive sync completed: ${ids.size} tracks are now tracked")
-        return true
-    }
-
-    private fun loadTrackedDiscoverWeeklyTrackIds(): Set<String> {
-        val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
-        val raw = prefs.getString(AppConstants.KEY_TRACKED_DISCOVER_WEEKLY_IDS, null) ?: return emptySet()
-        return try {
-            val json = JSONArray(raw)
-            val result = mutableSetOf<String>()
-            for (index in 0 until json.length()) {
-                val id = json.optString(index)
-                if (id.isNotBlank()) {
-                    result.add(id)
-                }
-            }
-            result
-        } catch (_: Exception) {
-            emptySet()
-        }
-    }
-
     private fun currentUserId(token: String): String? {
         val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
         val cached = prefs.getString(AppConstants.KEY_SPOTIFY_USER_ID, null)
@@ -663,6 +558,46 @@ class SpotifyLikeWorker(
         return connection
     }
 
+    private fun supabaseIncrementTrackLike(userId: String, trackId: String): Int? {
+        val prefs = applicationContext.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
+        val supabaseUrl = prefs.getString(AppConstants.KEY_SUPABASE_URL, null)
+        val supabaseKey = prefs.getString(AppConstants.KEY_SUPABASE_ANON_KEY, null)
+        if (supabaseUrl.isNullOrBlank() || supabaseKey.isNullOrBlank()) {
+            return null
+        }
+
+        return try {
+            val connection = URL("$supabaseUrl/rest/v1/rpc/increment_track_like")
+                .openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("apikey", supabaseKey)
+            connection.setRequestProperty("Authorization", "Bearer $supabaseKey")
+
+            val body = JSONObject()
+                .put("p_user_id", userId)
+                .put("p_track_id", trackId)
+                .toString()
+            OutputStreamWriter(connection.outputStream).use { it.write(body) }
+
+            val code = connection.responseCode
+            if (code in 200..299) {
+                val payload = readBody(connection)
+                payload?.trim()?.toIntOrNull()
+            } else {
+                val error = readErrorBody(connection)
+                log("Supabase increment failed ($code): ${error ?: "<empty>"}")
+                null
+            }
+        } catch (e: Exception) {
+            log("Supabase increment error: ${e.message}")
+            null
+        }
+    }
+
     private fun readBody(connection: HttpURLConnection): String? {
         return try {
             BufferedReader(connection.inputStream.reader()).use { it.readText() }
@@ -724,10 +659,6 @@ class SpotifyLikeWorker(
     )
 
     companion object {
-        private const val KEY_INPUT_MODE = "mode"
-        private const val MODE_SYNC_ARCHIVE = "sync_archive"
-        private const val UNIQUE_ARCHIVE_SYNC_WORK = "spotify-archive-sync-weekly"
-
         fun enqueue(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -742,39 +673,6 @@ class SpotifyLikeWorker(
                 ExistingWorkPolicy.REPLACE,
                 request
             )
-        }
-
-        fun enqueueWeeklyArchiveSync(context: Context, syncHour24: Int = 10) {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
-
-            val request = PeriodicWorkRequestBuilder<SpotifyLikeWorker>(7, TimeUnit.DAYS)
-                .setConstraints(constraints)
-                .setInitialDelay(msUntilNextMonday(syncHour24), TimeUnit.MILLISECONDS)
-                .setInputData(workDataOf(KEY_INPUT_MODE to MODE_SYNC_ARCHIVE))
-                .build()
-
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                UNIQUE_ARCHIVE_SYNC_WORK,
-                ExistingPeriodicWorkPolicy.UPDATE,
-                request
-            )
-        }
-
-        private fun msUntilNextMonday(syncHour24: Int): Long {
-            val now = Calendar.getInstance()
-            val next = Calendar.getInstance().apply {
-                set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
-                set(Calendar.HOUR_OF_DAY, syncHour24)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-                if (!after(now)) {
-                    add(Calendar.WEEK_OF_YEAR, 1)
-                }
-            }
-            return (next.timeInMillis - now.timeInMillis).coerceAtLeast(0L)
         }
     }
 }

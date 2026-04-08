@@ -162,6 +162,16 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 					result.success(true)
 				}
 
+				"setSupabaseConfig" -> {
+					val url = call.argument<String>("supabaseUrl") ?: ""
+					val key = call.argument<String>("supabaseAnonKey") ?: ""
+					prefs().edit()
+						.putString(AppConstants.KEY_SUPABASE_URL, url)
+						.putString(AppConstants.KEY_SUPABASE_ANON_KEY, key)
+						.apply()
+					result.success(true)
+				}
+
 				else -> result.notImplemented()
 			}
 		}
