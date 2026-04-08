@@ -51,7 +51,7 @@ flutter pub get           # Install dependencies
 flutter analyze           # Lint check
 flutter test              # Run all tests
 flutter test --coverage   # Run tests with coverage
-flutter build apk --release --dart-define=SPOTIFY_CLIENT_ID=<id>  # Build APK
+flutter build apk --release --dart-define-from-file=.env            # Build APK (reads .env)
 ```
 
 ## Key files
@@ -79,4 +79,5 @@ flutter build apk --release --dart-define=SPOTIFY_CLIENT_ID=<id>  # Build APK
 Requires a Spotify Developer App:
 1. Create app at https://developer.spotify.com/dashboard
 2. Set redirect URI: `likespotify://auth-callback`
-3. Pass client ID at build time: `--dart-define=SPOTIFY_CLIENT_ID=<your_id>`
+3. Copy `.env.example` to `.env` and fill in values
+4. Build with `--dart-define-from-file=.env`

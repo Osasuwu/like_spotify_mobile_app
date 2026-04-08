@@ -20,6 +20,8 @@ const _redirectUri = String.fromEnvironment(
   defaultValue: 'likespotify://auth-callback',
 );
 const _spotifyClientId = String.fromEnvironment('SPOTIFY_CLIENT_ID');
+const _supabaseUrl = String.fromEnvironment('SUPABASE_URL');
+const _supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
   (ref) => SharedPrefsSettingsRepository(),
@@ -52,5 +54,7 @@ final appControllerProvider =
     platformServiceRepository: ref.read(platformServiceRepositoryProvider),
     musicServiceRepository: ref.read(musicServiceRepositoryProvider),
     appLinks: ref.read(appLinksProvider),
+    supabaseUrl: _supabaseUrl,
+    supabaseAnonKey: _supabaseAnonKey,
   );
 });

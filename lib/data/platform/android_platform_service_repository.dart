@@ -128,4 +128,15 @@ class AndroidPlatformServiceRepository implements PlatformServiceRepository {
       'clientId': clientId,
     });
   }
+
+  @override
+  Future<void> syncSupabaseConfig({
+    required String supabaseUrl,
+    required String supabaseAnonKey,
+  }) async {
+    await _methodChannel.invokeMethod<void>('setSupabaseConfig', <String, dynamic>{
+      'supabaseUrl': supabaseUrl,
+      'supabaseAnonKey': supabaseAnonKey,
+    });
+  }
 }

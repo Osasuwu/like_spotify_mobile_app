@@ -21,6 +21,8 @@ class AppController extends StateNotifier<AppState> {
     required PlatformServiceRepository platformServiceRepository,
     required MusicServiceRepository musicServiceRepository,
     required AppLinks appLinks,
+    this.supabaseUrl = '',
+    this.supabaseAnonKey = '',
   })  : _settingsRepository = settingsRepository,
         _platformServiceRepository = platformServiceRepository,
         _musicServiceRepository = musicServiceRepository,
@@ -41,6 +43,8 @@ class AppController extends StateNotifier<AppState> {
   final PlatformServiceRepository _platformServiceRepository;
   final MusicServiceRepository _musicServiceRepository;
   final AppLinks _appLinks;
+  final String supabaseUrl;
+  final String supabaseAnonKey;
 
   StreamSubscription<Map<String, dynamic>>? _nativeEventsSub;
   StreamSubscription<Uri>? _linkSub;
@@ -65,6 +69,10 @@ class AppController extends StateNotifier<AppState> {
       await _platformServiceRepository.updatePlaylistRules(
         archivePlaylistName: archivePlaylistName,
         bestOfPlaylistName: bestOfPlaylistName,
+      );
+      await _platformServiceRepository.syncSupabaseConfig(
+        supabaseUrl: supabaseUrl,
+        supabaseAnonKey: supabaseAnonKey,
       );
 
       state = state.copyWith(

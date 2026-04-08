@@ -26,4 +26,8 @@ abstract class PlatformServiceRepository {
     required int expiresAtEpochSec,
     required String clientId,
   });
+  Future<void> syncSupabaseConfig({
+    required String supabaseUrl,
+    required String supabaseAnonKey,
+  });
 }
