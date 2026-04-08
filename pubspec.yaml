@@ -1,5 +1,5 @@
 name: like_spotify_mobile_app
-description: "A new Flutter project."
+description: "Like Spotify tracks with headset button patterns. Cross-device like counters, archive playlist management, best-of promotion."
 publish_to: 'none'
 version: 0.1.0
 

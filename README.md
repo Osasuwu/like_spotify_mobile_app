@@ -1,103 +1,125 @@
-# Like Spotify Mobile App (Android-only)
+# Like Spotify
 
-Flutter Android application that listens for headset/media button signals in a foreground service and sends a Spotify “Like current track” action when the configured signal pattern is detected.
+Like the currently playing Spotify track with a headset button pattern (Android) or keyboard shortcut (desktop). Manages a Discover Weekly archive playlist — liked tracks are removed so you never re-listen to them.
 
-## Implemented scope
+## How it works
 
-- Android-only implementation (no iOS code path).
-- Foreground service with persistent notification for background/locked-screen operation.
-- Media signal handling via `MediaSessionCompat` callback plus `BroadcastReceiver` for media button intents.
-- Configurable trigger pattern and timing window (default `pause,play` within `1000ms`).
-- Debounce logic to reduce false positives and rapid spam.
-- Spotify OAuth (PKCE), secure token storage, token refresh, and like-current-track API calls.
-- MIUI-focused onboarding/help actions for battery optimization and autostart.
-- Minimal Material 3 UI with drawer-based settings/debug screens.
+1. **Trigger** — pause-play your headset (Android) or press a hotkey (desktop)
+2. **Like** — the current track is added to your Spotify Liked Songs
+3. **Archive cleanup** — if the track is in your archive playlist, it gets removed
+4. **Best-of promotion** — like a track 3 times across devices and it's added to your best-of playlist
+5. **Artist follow** — like 5+ tracks from an artist and they get auto-followed
 
-## Architecture (Clean Architecture)
+## Quick start
 
-- `lib/presentation`: screens, drawer, and `Riverpod` state controller.
-- `lib/domain`: entities, repository contracts, and testable signal matcher logic.
-- `lib/data`: repository implementations, platform channel bridge, Spotify API/OAuth, local settings/token stores.
-- `android/app/src/main/kotlin/...`: native Android foreground service, media receiver, boot restart receiver, and worker.
+### 1. Spotify Developer App
 
-### State management choice
+1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+2. Create an app
+3. Add redirect URIs:
+   - `likespotify://auth-callback` (Android)
+   - `http://127.0.0.1:8793/callback` (Desktop)
+4. Copy your Client ID
 
-`Riverpod` was selected because it keeps business logic out of widgets, supports explicit dependency injection, and makes controller logic unit-testable.
-
-## Key files
-
-- Flutter entry/app shell: `lib/main.dart`, `lib/app.dart`
-- App state/business logic: `lib/presentation/state/app_controller.dart`
-- Trigger config UI: `lib/presentation/screens/trigger_config_screen.dart`
-- Service bridge (MethodChannel/EventChannel): `lib/data/platform/android_platform_service_repository.dart`
-- Spotify auth/API: `lib/data/spotify/spotify_music_service_repository.dart`, `lib/data/spotify/spotify_client.dart`
-- Android service: `android/app/src/main/kotlin/com/example/like_spotify_mobile_app/MediaButtonForegroundService.kt`
-- Android media button receiver: `android/app/src/main/kotlin/com/example/like_spotify_mobile_app/MediaButtonReceiver.kt`
-- Android boot recovery receiver: `android/app/src/main/kotlin/com/example/like_spotify_mobile_app/BootCompletedReceiver.kt`
-- Android background like worker: `android/app/src/main/kotlin/com/example/like_spotify_mobile_app/SpotifyLikeWorker.kt`
-
-## Build and run
-
-1. Configure a Spotify app in Spotify Developer Dashboard.
-2. Add redirect URI: `likespotify://auth-callback`.
-3. Run:
+### 2. Android
 
 ```bash
+# Clone and setup
+git clone https://github.com/Osasuwu/like_spotify_mobile_app.git
+cd like_spotify_mobile_app
+
+# Configure
+cp .env.example .env
+# Edit .env — set SPOTIFY_CLIENT_ID (and optionally SUPABASE_URL/KEY)
+
+# Build
 flutter pub get
-flutter build apk --release --dart-define=SPOTIFY_CLIENT_ID=your_client_id --dart-define=SPOTIFY_REDIRECT_URI=likespotify://auth-callback
+flutter build apk --release --dart-define-from-file=.env
 ```
 
-## Permissions and Android integration
+Install the APK, connect Spotify in the app, enable the listener service.
 
-- Manifest permissions include:
-	- `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`
-	- `POST_NOTIFICATIONS` (Android 13+ runtime prompt is handled)
-	- `INTERNET`, `WAKE_LOCK`, `RECEIVE_BOOT_COMPLETED`
-	- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
-- Foreground notification persists while listener is active.
-- Boot receiver restarts listener if user previously enabled it.
+### 3. Desktop (Windows / macOS / Linux)
 
-## MIUI handling
+```bash
+pip install requests
+cd desktop
+python like_spotify.py --config   # creates config file
+# Edit ~/.like_spotify/config.json — set client_id
+python like_spotify.py --auth     # one-time browser auth
+```
 
-- Detects Xiaomi/Redmi/Poco manufacturer.
-- Provides guided steps in UI for:
-	- disabling battery restrictions,
-	- enabling autostart,
-	- keeping app locked in recents.
-- Opens settings intents where MIUI exposes them.
+Bind `pythonw like_spotify.py` to a keyboard shortcut. See [desktop/README.md](desktop/README.md) for details.
 
-## Trigger configuration behavior
+### 4. Cross-device counters (optional)
 
-- Pattern is stored as comma-separated sequence (e.g., `pause,play`, `pause,play,pause`).
-- Window and debounce are configurable from UI.
-- Default: `pause,play` in `1000ms` with debounce `650ms`.
+Like counters are shared across devices via [Supabase](https://supabase.com) (free tier).
 
-## Error handling covered
+1. Create a Supabase project
+2. Run the setup SQL:
+   ```sql
+   CREATE TABLE public.track_likes (
+       user_id TEXT NOT NULL,
+       track_id TEXT NOT NULL,
+       count INTEGER NOT NULL DEFAULT 1,
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       PRIMARY KEY (user_id, track_id)
+   );
 
-- No track playing (Spotify returns 204): action skipped and logged.
-- Service disconnected / token missing: logged and fails gracefully.
-- Token expired: refresh token flow attempted.
-- Offline: command skipped and logged.
-- Rapid signal spam: debounce guard.
+   CREATE OR REPLACE FUNCTION increment_track_like(p_user_id TEXT, p_track_id TEXT)
+   RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+   DECLARE new_count INTEGER;
+   BEGIN
+       INSERT INTO public.track_likes (user_id, track_id, count, updated_at)
+       VALUES (p_user_id, p_track_id, 1, now())
+       ON CONFLICT (user_id, track_id)
+       DO UPDATE SET count = track_likes.count + 1, updated_at = now()
+       RETURNING count INTO new_count;
+       RETURN new_count;
+   END; $$;
 
-## Android policy limits and best workaround
+   ALTER TABLE public.track_likes ENABLE ROW LEVEL SECURITY;
+   CREATE POLICY "anon_full_access" ON public.track_likes FOR ALL USING (true) WITH CHECK (true);
+   ```
+3. Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to `.env` (Android) and `~/.like_spotify/config.json` (desktop)
 
-Some requirements are constrained by Android OEM/system behavior:
+Without Supabase, counters are stored locally per device.
 
-1. **Aggressive OEM process killing (especially MIUI)**
-	 - Limitation: foreground services can still be killed by OEM policies/user battery modes.
-	 - Workaround: battery optimization exemption + MIUI autostart + user education flows (implemented).
+## Architecture
 
-2. **Media button dispatch ownership**
-	 - Limitation: only active media sessions and system routing receive all media button events consistently.
-	 - Workaround: use `MediaSession` callback + `MEDIA_BUTTON` receiver fallback; keep listener active in foreground service (implemented).
+```
+Android (Flutter + Kotlin)          Desktop (Python)
+┌──────────────────────┐           ┌──────────────────┐
+│  MediaSession        │           │  OS hotkey        │
+│  pause-play pattern  │           │  like_spotify.py  │
+│       ↓              │           │       ↓           │
+│  SpotifyLikeWorker   │           │  Spotify API      │
+│  • like track        │           │  • like track     │
+│  • remove from       │           │  • remove from    │
+│    archive           │           │    archive        │
+│  • Supabase counter  │           │  • Supabase       │
+│  • best-of / follow  │           │    counter        │
+└──────┬───────────────┘           └──────┬───────────┘
+       │                                  │
+       └──────────┬───────────────────────┘
+                  ↓
+          Spotify Web API (shared state)
+          Supabase (shared counters)
+```
 
-3. **Notification permission on Android 13+**
-	 - Limitation: without permission, foreground service UX can degrade and user may miss status controls.
-	 - Workaround: explicit permission flow + settings deep link (implemented).
+- `lib/` — Flutter app (Dart): UI, state management (Riverpod), Spotify OAuth
+- `android/.../kotlin/` — Native Android: foreground service, MediaSession, background worker
+- `desktop/` — Python script: OAuth PKCE, Spotify API, desktop notifications
 
-## Non-goals
+## Configuration
 
-- No iOS support.
-- No iOS-specific abstractions.
-- No hidden third-party background "magic" runtime.
+| Setting | Android | Desktop |
+|---------|---------|---------|
+| Trigger pattern | In-app UI | N/A (hotkey) |
+| Archive playlist name | In-app UI | `~/.like_spotify/config.json` |
+| Best-of playlist name | In-app UI | `~/.like_spotify/config.json` |
+| Like threshold for best-of | 3 (default) | 3 (default) |
+
+## License
+
+[MIT](LICENSE)

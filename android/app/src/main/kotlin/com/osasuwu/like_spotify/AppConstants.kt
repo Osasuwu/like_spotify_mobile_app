@@ -1,4 +1,4 @@
-package com.example.like_spotify_mobile_app
+package com.osasuwu.like_spotify
 
 object AppConstants {
     const val PREFS = "like_spotify_prefs"
@@ -24,9 +24,9 @@ object AppConstants {
     const val KEY_SUPABASE_ANON_KEY = "supabase_anon_key"
     const val PLAYLIST_CACHE_TTL_MS = 12 * 60 * 60 * 1000L  // 12 hours
 
-    const val ACTION_MEDIA_EVENT = "com.example.like_spotify_mobile_app.MEDIA_EVENT"
-    const val ACTION_LOG_EVENT = "com.example.like_spotify_mobile_app.LOG_EVENT"
-    const val ACTION_SERVICE_STATE = "com.example.like_spotify_mobile_app.SERVICE_STATE"
+    const val ACTION_MEDIA_EVENT = "com.osasuwu.like_spotify.MEDIA_EVENT"
+    const val ACTION_LOG_EVENT = "com.osasuwu.like_spotify.LOG_EVENT"
+    const val ACTION_SERVICE_STATE = "com.osasuwu.like_spotify.SERVICE_STATE"
 
     const val EXTRA_EVENT = "event"
     const val EXTRA_LOG = "log"

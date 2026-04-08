@@ -1,4 +1,4 @@
-package com.example.like_spotify_mobile_app
+package com.osasuwu.like_spotify
 
 import android.content.BroadcastReceiver
 import android.content.Context
