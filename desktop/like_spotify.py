@@ -371,11 +371,35 @@ def notify(title, message):
 
 # --- Main ---------------------------------------------------------------------
 
+def do_setup(args):
+    """Create config from --setup arguments. Overwrites existing config."""
+    cfg = dict(DEFAULT_CONFIG)
+    if args.client_id:
+        cfg["client_id"] = args.client_id
+    if args.supabase_url:
+        cfg["supabase_url"] = args.supabase_url
+    if args.supabase_key:
+        cfg["supabase_anon_key"] = args.supabase_key
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"Config saved to {CONFIG_FILE}")
+    print("Next step: python like_spotify.py --auth")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Like current Spotify track")
     parser.add_argument("--auth", action="store_true", help="Authenticate via browser")
     parser.add_argument("--config", action="store_true", help="Show config location")
+    parser.add_argument("--setup", action="store_true", help="Create config from arguments")
+    parser.add_argument("--client-id", dest="client_id", help="Spotify Client ID (for --setup)")
+    parser.add_argument("--supabase-url", dest="supabase_url", help="Supabase project URL (for --setup)")
+    parser.add_argument("--supabase-key", dest="supabase_key", help="Supabase anon key (for --setup)")
     args = parser.parse_args()
+
+    if args.setup:
+        do_setup(args)
+        return
 
     config = load_config()
 
@@ -385,8 +409,8 @@ def main():
         return
 
     if not config.get("client_id"):
-        print(f"Set client_id in {CONFIG_FILE}")
-        print("Get one at https://developer.spotify.com/dashboard")
+        print(f"No client_id configured. Run:")
+        print(f"  python like_spotify.py --setup --client-id YOUR_ID")
         sys.exit(1)
 
     if args.auth:
