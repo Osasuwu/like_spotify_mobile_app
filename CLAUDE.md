@@ -6,6 +6,8 @@ Android app (Flutter + Kotlin) that listens for media button patterns (e.g. paus
 
 Repo: `Osasuwu/like_spotify_mobile_app`
 
+**Status**: inactive — lower priority than redrobot and jarvis. No advanced protocols (PM dispatch, parallel work) needed. Standard Claude Code practices apply.
+
 ## Tech stack
 
 - **Framework**: Flutter (Dart) — Android-only, other platforms are stubs
