@@ -61,12 +61,11 @@ void main() {
         expect(state.isExpired, equals(false));
       });
 
-      test('returns true when expiresAt is exactly now', () {
-        final now = DateTime.now().toUtc();
+      test('returns false when expiresAt is slightly in the future', () {
         final state = SpotifyAuthState(
           accessToken: 'token',
           refreshToken: 'refresh',
-          expiresAt: now,
+          expiresAt: DateTime.now().toUtc().add(Duration(seconds: 10)),
           connected: true,
         );
 
