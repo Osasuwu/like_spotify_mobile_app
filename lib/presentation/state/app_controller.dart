@@ -349,6 +349,37 @@ class AppController extends StateNotifier<AppState> {
       unawaited(addLog('Media event: $value'));
       return;
     }
+
+    if (type == 'trigger_like') {
+      unawaited(_handleNativeTriggerLike());
+      return;
+    }
+  }
+
+  Future<void> _handleNativeTriggerLike() async {
+    try {
+      state = state.copyWith(clearError: true, clearLikeResult: true, liking: true);
+      final result = await _musicServiceRepository.likeCurrentTrack();
+      state = state.copyWith(lastLikeResult: result, liking: false);
+
+      await _platformServiceRepository.playFeedbackTone(success: result.success);
+
+      await addLog('Liked: ${result.trackName} (x${result.trackLikeCount})');
+      if (result.removedFromArchive) {
+        await addLog('Removed from archive playlist');
+      }
+      if (result.addedToBestOf) {
+        await addLog('Added to best-of playlist');
+      }
+      if (result.followedArtistNames.isNotEmpty) {
+        await addLog('Auto-followed: ${result.followedArtistNames.join(", ")}');
+      }
+    } catch (error) {
+      state = state.copyWith(lastError: error.toString(), liking: false);
+      await _platformServiceRepository.playFeedbackTone(success: false);
+      await addLog('Like from trigger failed: $error');
+      await _tryQueueCurrentTrack();
+    }
   }
 
   @override

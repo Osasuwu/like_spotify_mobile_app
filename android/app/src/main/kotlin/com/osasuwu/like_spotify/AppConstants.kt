@@ -27,6 +27,7 @@ object AppConstants {
     const val ACTION_MEDIA_EVENT = "com.osasuwu.like_spotify.MEDIA_EVENT"
     const val ACTION_LOG_EVENT = "com.osasuwu.like_spotify.LOG_EVENT"
     const val ACTION_SERVICE_STATE = "com.osasuwu.like_spotify.SERVICE_STATE"
+    const val ACTION_TRIGGER_LIKE = "com.osasuwu.like_spotify.TRIGGER_LIKE"
 
     const val EXTRA_EVENT = "event"
     const val EXTRA_LOG = "log"

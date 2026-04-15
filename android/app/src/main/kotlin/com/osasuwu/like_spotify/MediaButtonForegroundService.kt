@@ -92,7 +92,14 @@ class MediaButtonForegroundService : Service() {
         broadcastMediaEvent(event)
         if (detector.onEvent(event, System.currentTimeMillis())) {
             log("Trigger matched: ${loadPattern().joinToString(" -> ")}")
-            SpotifyLikeWorker.enqueue(this)
+            if (MainActivity.isFlutterAttached) {
+                log("Delegating to Flutter (full workflow)")
+                val intent = Intent(AppConstants.ACTION_TRIGGER_LIKE)
+                LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+            } else {
+                log("Flutter not attached — using WorkManager fallback")
+                SpotifyLikeWorker.enqueue(this)
+            }
         }
     }
 

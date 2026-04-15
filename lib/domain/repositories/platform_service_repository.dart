@@ -30,4 +30,5 @@ abstract class PlatformServiceRepository {
     required String supabaseUrl,
     required String supabaseAnonKey,
   });
+  Future<void> playFeedbackTone({required bool success});
 }

@@ -21,6 +21,13 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 	private var eventSink: EventChannel.EventSink? = null
 	private var localReceiver: BroadcastReceiver? = null
 
+	companion object {
+		@Volatile
+		@JvmStatic
+		var isFlutterAttached: Boolean = false
+			private set
+	}
+
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
 
@@ -172,6 +179,12 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 					result.success(true)
 				}
 
+				"playFeedbackTone" -> {
+					val success = call.argument<Boolean>("success") ?: true
+					FeedbackPlayer.play(this, success)
+					result.success(true)
+				}
+
 				else -> result.notImplemented()
 			}
 		}
@@ -182,6 +195,7 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 
 	override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
 		eventSink = events
+		isFlutterAttached = true
 		localReceiver = object : BroadcastReceiver() {
 			override fun onReceive(context: Context, intent: Intent) {
 				when (intent.action) {
@@ -199,6 +213,10 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 						val value = intent.getBooleanExtra(AppConstants.EXTRA_ACTIVE, false)
 						eventSink?.success(mapOf("type" to "state", "value" to value))
 					}
+
+					AppConstants.ACTION_TRIGGER_LIKE -> {
+						eventSink?.success(mapOf("type" to "trigger_like"))
+					}
 				}
 			}
 		}
@@ -207,11 +225,13 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 			addAction(AppConstants.ACTION_MEDIA_EVENT)
 			addAction(AppConstants.ACTION_LOG_EVENT)
 			addAction(AppConstants.ACTION_SERVICE_STATE)
+			addAction(AppConstants.ACTION_TRIGGER_LIKE)
 		}
 		LocalBroadcastManager.getInstance(this).registerReceiver(localReceiver!!, filter)
 	}
 
 	override fun onCancel(arguments: Any?) {
+		isFlutterAttached = false
 		localReceiver?.let {
 			LocalBroadcastManager.getInstance(this).unregisterReceiver(it)
 		}

@@ -139,4 +139,11 @@ class AndroidPlatformServiceRepository implements PlatformServiceRepository {
       'supabaseAnonKey': supabaseAnonKey,
     });
   }
+
+  @override
+  Future<void> playFeedbackTone({required bool success}) async {
+    await _methodChannel.invokeMethod<void>('playFeedbackTone', <String, dynamic>{
+      'success': success,
+    });
+  }
 }
