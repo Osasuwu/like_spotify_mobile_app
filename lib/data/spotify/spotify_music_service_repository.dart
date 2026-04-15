@@ -2,10 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../domain/entities/like_result.dart';
+import '../../domain/entities/pending_like.dart';
 import '../../domain/entities/spotify_auth_state.dart';
+import '../../domain/entities/track_info.dart';
+import '../../domain/repositories/like_count_repository.dart';
 import '../../domain/repositories/music_service_repository.dart';
 import '../../domain/repositories/platform_service_repository.dart';
+import '../../domain/repositories/settings_repository.dart';
 import 'spotify_client.dart';
+import 'spotify_playlist_service.dart';
 import 'spotify_token_store.dart';
 
 class SpotifyMusicServiceRepository implements MusicServiceRepository {
@@ -13,34 +19,41 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
     required SpotifyClient spotifyClient,
     required SpotifyTokenStore tokenStore,
     required PlatformServiceRepository platformServiceRepository,
+    required LikeCountRepository likeCountRepository,
+    required SettingsRepository settingsRepository,
     required String clientId,
     required String redirectUri,
   })  : _spotifyClient = spotifyClient,
         _tokenStore = tokenStore,
         _platformServiceRepository = platformServiceRepository,
+        _likeCountRepository = likeCountRepository,
+        _settingsRepository = settingsRepository,
         _clientId = clientId,
-        _redirectUri = redirectUri;
+        _redirectUri = redirectUri,
+        _playlistService = SpotifyPlaylistService(spotifyClient);
 
   final SpotifyClient _spotifyClient;
   final SpotifyTokenStore _tokenStore;
   final PlatformServiceRepository _platformServiceRepository;
+  final LikeCountRepository _likeCountRepository;
+  final SettingsRepository _settingsRepository;
+  final SpotifyPlaylistService _playlistService;
   final String _clientId;
   final String _redirectUri;
 
   String? _pendingVerifier;
   String? _pendingState;
 
+  // ── Auth ───────────────────────────────────────────────────────
+
   @override
   Future<SpotifyAuthState> getAuthState() async {
     final state = await _readStoredAuthState();
-    if (!_shouldRefresh(state)) {
-      return state;
-    }
+    if (!_shouldRefresh(state)) return state;
 
     try {
       return await _refreshAuthState(state);
     } catch (error, stackTrace) {
-      // Keep existing state available when refresh fails (for example offline startup).
       debugPrint('Spotify token refresh skipped in getAuthState: $error\n$stackTrace');
       return state;
     }
@@ -64,11 +77,16 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
   }
 
   bool _shouldRefresh(SpotifyAuthState state) {
-    if (!state.connected) {
-      return false;
-    }
+    if (!state.connected) return false;
     final access = state.accessToken;
-    return state.isExpired || access == null || access.isEmpty;
+    if (state.isExpired || access == null || access.isEmpty) return true;
+    // Proactive refresh: if token expires within 5 minutes
+    final expiresAt = state.expiresAt;
+    if (expiresAt != null) {
+      final remaining = expiresAt.difference(DateTime.now().toUtc());
+      if (remaining.inMinutes < 5) return true;
+    }
+    return false;
   }
 
   Future<SpotifyAuthState> _refreshAuthState(SpotifyAuthState state) async {
@@ -104,6 +122,18 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
       connected: true,
     );
   }
+
+  Future<String> _ensureAccessToken() async {
+    await refreshIfNeeded();
+    final state = await _readStoredAuthState();
+    final token = state.accessToken;
+    if (token == null || token.isEmpty) {
+      throw Exception('Service is disconnected');
+    }
+    return token;
+  }
+
+  // ── OAuth flow ─────────────────────────────────────────────────
 
   Future<Uri> beginSpotifyAuthorization() async {
     if (_clientId.isEmpty) {
@@ -181,35 +211,14 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
   }
 
   @override
-  Future<void> likeCurrentTrack() async {
-    await refreshIfNeeded();
-    final state = await _readStoredAuthState();
-    final accessToken = state.accessToken;
-    if (accessToken == null) {
-      throw Exception('Service is disconnected');
-    }
-
-    final trackId = await _spotifyClient.currentTrackId(accessToken);
-    if (trackId == null || trackId.isEmpty) {
-      throw Exception('No track is currently playing');
-    }
-
-    await _spotifyClient.likeTrack(trackId: trackId, accessToken: accessToken);
-  }
-
-  @override
   Future<void> refreshIfNeeded() async {
     final state = await _readStoredAuthState();
-    if (!_shouldRefresh(state)) {
-      return;
-    }
+    if (!_shouldRefresh(state)) return;
     await _refreshAuthState(state);
   }
 
   Future<bool> tryHandleIncomingUri(Uri uri) async {
-    if (!uri.toString().startsWith(_redirectUri)) {
-      return false;
-    }
+    if (!uri.toString().startsWith(_redirectUri)) return false;
     try {
       await completeAuthorization(uri);
       return true;
@@ -218,4 +227,121 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
       rethrow;
     }
   }
+
+  // ── Full like workflow ─────────────────────────────────────────
+
+  @override
+  Future<LikeResult> likeCurrentTrack() async {
+    var accessToken = await _ensureAccessToken();
+
+    // 1. Get current track info (with 401 retry)
+    TrackInfo? trackInfo;
+    try {
+      trackInfo = await _spotifyClient.getCurrentlyPlayingFull(accessToken);
+    } on SpotifyAuthException {
+      await refreshIfNeeded();
+      accessToken = await _ensureAccessToken();
+      trackInfo = await _spotifyClient.getCurrentlyPlayingFull(accessToken);
+    }
+
+    if (trackInfo == null) {
+      throw Exception('No track is currently playing');
+    }
+
+    return likeTrack(trackInfo);
+  }
+
+  @override
+  Future<LikeResult> likeTrack(TrackInfo trackInfo) async {
+    final accessToken = await _ensureAccessToken();
+
+    // 1. Like the track
+    await _spotifyClient.likeTrack(trackId: trackInfo.trackId, accessToken: accessToken);
+
+    // 3. Remove from archive playlist (non-blocking)
+    var removedFromArchive = false;
+    try {
+      final archiveName = await _settingsRepository.loadArchivePlaylistName();
+      if (archiveName.isNotEmpty) {
+        final archiveId = await _playlistService.findPlaylistByName(accessToken, archiveName);
+        if (archiveId != null) {
+          await _playlistService.removeTrack(accessToken, archiveId, trackInfo.trackUri);
+          removedFromArchive = true;
+        }
+      }
+    } catch (e) {
+      debugPrint('Archive removal failed: $e');
+    }
+
+    // 4. Increment like count
+    final trackLikeCount = await _likeCountRepository.incrementTrackLikeCount(trackInfo.trackId);
+
+    // 5. Add to best-of playlist at 3 likes
+    var addedToBestOf = false;
+    if (trackLikeCount == 3) {
+      try {
+        final bestOfName = await _settingsRepository.loadBestOfPlaylistName();
+        if (bestOfName.isNotEmpty) {
+          final bestOfId = await _playlistService.ensurePlaylist(accessToken, bestOfName);
+          if (bestOfId != null) {
+            await _playlistService.addTrack(accessToken, bestOfId, trackInfo.trackUri);
+            addedToBestOf = true;
+          }
+        }
+      } catch (e) {
+        debugPrint('Best-of add failed: $e');
+      }
+    }
+
+    // 6. Increment artist like counts and auto-follow at threshold
+    final followedArtistNames = <String>[];
+    for (var i = 0; i < trackInfo.artistIds.length; i++) {
+      final artistId = trackInfo.artistIds[i];
+      final artistCount = await _likeCountRepository.incrementArtistLikeCount(artistId);
+      if (artistCount == 5) {
+        try {
+          await _spotifyClient.followArtists(accessToken, artistIds: [artistId]);
+          final name = i < trackInfo.artistNames.length ? trackInfo.artistNames[i] : artistId;
+          followedArtistNames.add(name);
+        } catch (e) {
+          debugPrint('Artist follow failed for $artistId: $e');
+        }
+      }
+    }
+
+    return LikeResult(
+      trackId: trackInfo.trackId,
+      trackName: trackInfo.trackName,
+      trackLiked: true,
+      removedFromArchive: removedFromArchive,
+      addedToBestOf: addedToBestOf,
+      followedArtistNames: followedArtistNames,
+      trackLikeCount: trackLikeCount,
+    );
+  }
+
+  @override
+  Future<int> processPendingLikes(List<PendingLike> pending) async {
+    var processed = 0;
+    for (final like in pending) {
+      try {
+        final trackInfo = TrackInfo(
+          trackId: like.trackId,
+          trackName: like.trackName,
+          artistIds: like.artistIds,
+          artistNames: like.artistNames,
+        );
+        await likeTrack(trackInfo);
+        await _settingsRepository.removePendingLike(like.trackId);
+        processed++;
+      } catch (e) {
+        debugPrint('Pending like retry failed for ${like.trackId}: $e');
+        break; // Stop on first failure — likely still offline
+      }
+    }
+    return processed;
+  }
+
+  /// Expose playlist service's cached user ID for Supabase like counting.
+  String? get cachedUserId => _playlistService.cachedUserId;
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_constants.dart';
+import '../../domain/entities/pending_like.dart';
 import '../../domain/entities/trigger_config.dart';
 import '../../domain/repositories/settings_repository.dart';
 
@@ -14,6 +15,7 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
   static const _keyBestOfPlaylistName = 'best_of_playlist_name';
   static const _keyServiceEnabled = 'service_enabled';
   static const _keyLogs = 'logs';
+  static const _keyPendingLikes = 'pending_likes';
 
   @override
   Future<TriggerConfig> loadTriggerConfig() async {
@@ -96,5 +98,47 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
   Future<void> clearLogs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_keyLogs, <String>[]);
+  }
+
+  @override
+  Future<List<PendingLike>> loadPendingLikes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_keyPendingLikes);
+    if (raw == null || raw.isEmpty) return <PendingLike>[];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list
+          .map((e) => PendingLike.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false);
+    } catch (_) {
+      return <PendingLike>[];
+    }
+  }
+
+  @override
+  Future<void> savePendingLikes(List<PendingLike> likes) async {
+    final prefs = await SharedPreferences.getInstance();
+    final json = jsonEncode(likes.map((e) => e.toJson()).toList());
+    await prefs.setString(_keyPendingLikes, json);
+  }
+
+  @override
+  Future<void> addPendingLike(PendingLike like) async {
+    final likes = await loadPendingLikes();
+    // Deduplicate by trackId
+    final filtered = likes.where((l) => l.trackId != like.trackId).toList();
+    filtered.add(like);
+    // Cap at 50
+    if (filtered.length > 50) {
+      filtered.removeRange(0, filtered.length - 50);
+    }
+    await savePendingLikes(filtered);
+  }
+
+  @override
+  Future<void> removePendingLike(String trackId) async {
+    final likes = await loadPendingLikes();
+    final filtered = likes.where((l) => l.trackId != trackId).toList();
+    await savePendingLikes(filtered);
   }
 }

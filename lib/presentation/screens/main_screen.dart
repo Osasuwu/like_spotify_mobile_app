@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/entities/like_result.dart';
 import '../state/app_providers.dart';
 import '../widgets/app_drawer.dart';
 
@@ -33,9 +34,28 @@ class MainScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 20),
             ElevatedButton(
-              onPressed: controller.likeCurrentTrackNow,
-              child: const Text('Like current track now (manual test)'),
+              onPressed: state.liking ? null : controller.likeCurrentTrackNow,
+              child: state.liking
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Like current track now'),
             ),
+            if (state.pendingLikesCount > 0) ...<Widget>[
+              const SizedBox(height: 8),
+              Text(
+                '${state.pendingLikesCount} like(s) queued — will retry when online',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+              ),
+            ],
+            if (state.lastLikeResult != null) ...<Widget>[
+              const SizedBox(height: 16),
+              _LikeResultCard(result: state.lastLikeResult!),
+            ],
             if (state.lastError != null) ...<Widget>[
               const SizedBox(height: 16),
               Padding(
@@ -52,6 +72,75 @@ class MainScreen extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _LikeResultCard extends StatelessWidget {
+  final LikeResult result;
+
+  const _LikeResultCard({required this.result});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Icon(Icons.favorite, color: theme.colorScheme.primary, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      result.trackName,
+                      style: theme.textTheme.titleSmall,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Text(
+                    'x${result.trackLikeCount}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                ],
+              ),
+              if (result.addedToBestOf || result.removedFromArchive || result.followedArtistNames.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: <Widget>[
+                    if (result.addedToBestOf)
+                      _badge(context, 'Best-of', Icons.star),
+                    if (result.removedFromArchive)
+                      _badge(context, 'Archive cleaned', Icons.cleaning_services),
+                    for (final name in result.followedArtistNames)
+                      _badge(context, 'Followed $name', Icons.person_add),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _badge(BuildContext context, String label, IconData icon) {
+    final theme = Theme.of(context);
+    return Chip(
+      avatar: Icon(icon, size: 14),
+      label: Text(label, style: theme.textTheme.labelSmall),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
   }
 }

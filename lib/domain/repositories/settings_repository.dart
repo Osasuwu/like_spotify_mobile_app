@@ -1,3 +1,4 @@
+import '../entities/pending_like.dart';
 import '../entities/trigger_config.dart';
 
 abstract class SettingsRepository {
@@ -12,4 +13,8 @@ abstract class SettingsRepository {
   Future<List<String>> loadLogs();
   Future<void> appendLog(String message);
   Future<void> clearLogs();
+  Future<List<PendingLike>> loadPendingLikes();
+  Future<void> savePendingLikes(List<PendingLike> likes);
+  Future<void> addPendingLike(PendingLike like);
+  Future<void> removePendingLike(String trackId);
 }

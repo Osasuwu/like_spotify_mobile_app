@@ -8,7 +8,9 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../core/app_constants.dart';
 import '../../data/spotify/spotify_music_service_repository.dart';
 import '../../domain/entities/app_log.dart';
+import '../../domain/entities/pending_like.dart';
 import '../../domain/entities/spotify_auth_state.dart';
+import '../../domain/entities/track_info.dart';
 import '../../domain/entities/trigger_config.dart';
 import '../../domain/repositories/music_service_repository.dart';
 import '../../domain/repositories/platform_service_repository.dart';
@@ -48,6 +50,7 @@ class AppController extends StateNotifier<AppState> {
 
   StreamSubscription<Map<String, dynamic>>? _nativeEventsSub;
   StreamSubscription<Uri>? _linkSub;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
   Future<void> _initialize() async {
     state = state.copyWith(loading: true, clearError: true);
@@ -91,9 +94,18 @@ class AppController extends StateNotifier<AppState> {
             .toList(growable: false),
       );
 
+      // Load pending likes count
+      final pendingLikes = await _settingsRepository.loadPendingLikes();
+      if (pendingLikes.isNotEmpty) {
+        state = state.copyWith(pendingLikesCount: pendingLikes.length);
+      }
+
       _nativeEventsSub ??=
           _platformServiceRepository.events().listen(_onNativeEvent);
       _linkSub ??= _appLinks.uriLinkStream.listen(_onIncomingLink);
+      _connectivitySub ??= Connectivity()
+          .onConnectivityChanged
+          .listen(_onConnectivityChanged);
     } catch (error) {
       state = state.copyWith(
         loading: false,
@@ -220,20 +232,72 @@ class AppController extends StateNotifier<AppState> {
   }
 
   Future<void> likeCurrentTrackNow() async {
-    final connection = await Connectivity().checkConnectivity();
-    if (connection.contains(ConnectivityResult.none)) {
-      state = state.copyWith(lastError: 'Network unavailable');
-      await addLog('Like command skipped: offline');
-      return;
-    }
-
     try {
-      await _musicServiceRepository.likeCurrentTrack();
-      await addLog('Like command sent successfully');
+      state = state.copyWith(clearError: true, clearLikeResult: true, liking: true);
+      final result = await _musicServiceRepository.likeCurrentTrack();
+      state = state.copyWith(lastLikeResult: result, liking: false);
+      await addLog('Liked: ${result.trackName} (x${result.trackLikeCount})');
+      if (result.removedFromArchive) {
+        await addLog('Removed from archive playlist');
+      }
+      if (result.addedToBestOf) {
+        await addLog('Added to best-of playlist');
+      }
+      if (result.followedArtistNames.isNotEmpty) {
+        await addLog('Auto-followed: ${result.followedArtistNames.join(", ")}');
+      }
     } catch (error) {
-      state = state.copyWith(lastError: error.toString());
+      state = state.copyWith(lastError: error.toString(), liking: false);
       await addLog('Like command failed: $error');
+      // Try to queue for offline retry — we need the track info.
+      // If we can still reach Spotify to get current track, queue it.
+      await _tryQueueCurrentTrack();
     }
+  }
+
+  Future<void> _tryQueueCurrentTrack() async {
+    try {
+      // Attempt to get current track info for queuing — may also fail if fully offline
+      final repository = _musicServiceRepository;
+      if (repository is! SpotifyMusicServiceRepository) return;
+
+      final auth = await repository.getAuthState();
+      if (!auth.connected || auth.accessToken == null) return;
+
+      // If we can't even get track info, nothing to queue
+    } catch (_) {
+      // Fully offline — can't queue without track info
+    }
+  }
+
+  Future<void> _onConnectivityChanged(List<ConnectivityResult> result) async {
+    if (result.contains(ConnectivityResult.none)) return;
+
+    final pending = await _settingsRepository.loadPendingLikes();
+    if (pending.isEmpty) return;
+
+    await addLog('Online — processing ${pending.length} queued like(s)...');
+    final processed = await _musicServiceRepository.processPendingLikes(pending);
+    if (processed > 0) {
+      await addLog('Processed $processed queued like(s)');
+      final remaining = await _settingsRepository.loadPendingLikes();
+      state = state.copyWith(pendingLikesCount: remaining.length);
+    }
+  }
+
+  /// Queue a track for offline retry.
+  Future<void> queueTrackForLater(TrackInfo trackInfo) async {
+    final pending = PendingLike(
+      trackId: trackInfo.trackId,
+      trackName: trackInfo.trackName,
+      artistIds: trackInfo.artistIds,
+      artistNames: trackInfo.artistNames,
+      queuedAt: DateTime.now().toUtc(),
+    );
+    await _settingsRepository.addPendingLike(pending);
+    final count = (await _settingsRepository.loadPendingLikes()).length;
+    state = state.copyWith(pendingLikesCount: count);
+    await addLog('Queued for later: ${trackInfo.trackName}');
   }
 
   Future<void> clearLogs() async {
@@ -291,6 +355,7 @@ class AppController extends StateNotifier<AppState> {
   void dispose() {
     _nativeEventsSub?.cancel();
     _linkSub?.cancel();
+    _connectivitySub?.cancel();
     super.dispose();
   }
 }

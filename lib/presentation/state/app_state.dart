@@ -1,4 +1,5 @@
 import '../../domain/entities/app_log.dart';
+import '../../domain/entities/like_result.dart';
 import '../../domain/entities/spotify_auth_state.dart';
 import '../../domain/entities/trigger_config.dart';
 
@@ -15,6 +16,9 @@ class AppState {
   final String bestOfPlaylistName;
   final List<AppLog> logs;
   final String? lastError;
+  final LikeResult? lastLikeResult;
+  final bool liking;
+  final int pendingLikesCount;
 
   const AppState({
     required this.serviceEnabled,
@@ -29,6 +33,9 @@ class AppState {
     required this.bestOfPlaylistName,
     required this.logs,
     required this.lastError,
+    this.lastLikeResult,
+    this.liking = false,
+    this.pendingLikesCount = 0,
   });
 
   factory AppState.initial(TriggerConfig config) {
@@ -62,13 +69,17 @@ class AppState {
     List<AppLog>? logs,
     String? lastError,
     bool clearError = false,
+    LikeResult? lastLikeResult,
+    bool clearLikeResult = false,
+    bool? liking,
+    int? pendingLikesCount,
   }) {
     return AppState(
       serviceEnabled: serviceEnabled ?? this.serviceEnabled,
       loading: loading ?? this.loading,
       isMiui: isMiui ?? this.isMiui,
       batteryOptimized: batteryOptimized ?? this.batteryOptimized,
-        notificationListenerEnabled:
+      notificationListenerEnabled:
           notificationListenerEnabled ?? this.notificationListenerEnabled,
       spotifyInstalled: spotifyInstalled ?? this.spotifyInstalled,
       authState: authState ?? this.authState,
@@ -77,6 +88,9 @@ class AppState {
       bestOfPlaylistName: bestOfPlaylistName ?? this.bestOfPlaylistName,
       logs: logs ?? this.logs,
       lastError: clearError ? null : (lastError ?? this.lastError),
+      lastLikeResult: clearLikeResult ? null : (lastLikeResult ?? this.lastLikeResult),
+      liking: liking ?? this.liking,
+      pendingLikesCount: pendingLikesCount ?? this.pendingLikesCount,
     );
   }
 }

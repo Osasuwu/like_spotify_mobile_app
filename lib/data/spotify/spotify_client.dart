@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -6,10 +7,12 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_constants.dart';
+import '../../domain/entities/track_info.dart';
 import 'spotify_models.dart';
 
 class SpotifyClient {
   final http.Client _http;
+  static const _timeout = Duration(seconds: 10);
 
   SpotifyClient(this._http);
 
@@ -74,7 +77,7 @@ class SpotifyClient {
         'client_id': clientId,
         'code_verifier': codeVerifier,
       },
-    );
+    ).timeout(_timeout);
 
     if (response.statusCode < 200 || response.statusCode > 299) {
       throw Exception('Spotify token exchange failed (${response.statusCode})');
@@ -102,7 +105,7 @@ class SpotifyClient {
         'refresh_token': refreshToken,
         'client_id': clientId,
       },
-    );
+    ).timeout(_timeout);
 
     if (response.statusCode < 200 || response.statusCode > 299) {
       throw Exception('Spotify token refresh failed (${response.statusCode})');
@@ -120,7 +123,7 @@ class SpotifyClient {
     final response = await _http.get(
       Uri.parse('${AppConstants.spotifyApiBase}/me/player/currently-playing'),
       headers: <String, String>{'Authorization': 'Bearer $accessToken'},
-    );
+    ).timeout(_timeout);
 
     if (response.statusCode == 204) {
       return null;
@@ -144,10 +147,225 @@ class SpotifyClient {
     final response = await _http.put(
       Uri.parse('${AppConstants.spotifyApiBase}/me/tracks?ids=$trackId'),
       headers: <String, String>{'Authorization': 'Bearer $accessToken'},
-    );
+    ).timeout(_timeout);
 
     if (response.statusCode < 200 || response.statusCode > 299) {
       throw Exception('Spotify like track failed (${response.statusCode})');
     }
   }
+
+  /// Returns full track info (id, name, artists) for the currently playing track.
+  Future<TrackInfo?> getCurrentlyPlayingFull(String accessToken) async {
+    final response = await _http.get(
+      Uri.parse('${AppConstants.spotifyApiBase}/me/player/currently-playing'),
+      headers: <String, String>{'Authorization': 'Bearer $accessToken'},
+    ).timeout(_timeout);
+
+    if (response.statusCode == 204) return null;
+
+    if (response.statusCode == 401) {
+      throw SpotifyAuthException('Token expired');
+    }
+
+    if (response.statusCode < 200 || response.statusCode > 299) {
+      throw Exception('Spotify current track failed (${response.statusCode})');
+    }
+
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final item = json['item'] as Map<String, dynamic>?;
+    if (item == null) return null;
+
+    final id = item['id'] as String?;
+    if (id == null || id.isEmpty) return null;
+
+    final name = item['name'] as String? ?? '';
+    final artists = item['artists'] as List<dynamic>? ?? <dynamic>[];
+    final artistIds = <String>[];
+    final artistNames = <String>[];
+    for (final artist in artists) {
+      final a = artist as Map<String, dynamic>;
+      final aid = a['id'] as String?;
+      if (aid != null && aid.isNotEmpty) {
+        artistIds.add(aid);
+        artistNames.add(a['name'] as String? ?? '');
+      }
+    }
+
+    return TrackInfo(
+      trackId: id,
+      trackName: name,
+      artistIds: artistIds,
+      artistNames: artistNames,
+    );
+  }
+
+  /// GET /me — returns the current user's Spotify ID.
+  Future<String?> getCurrentUserId(String accessToken) async {
+    final response = await _http.get(
+      Uri.parse('${AppConstants.spotifyApiBase}/me'),
+      headers: <String, String>{'Authorization': 'Bearer $accessToken'},
+    ).timeout(_timeout);
+    if (response.statusCode < 200 || response.statusCode > 299) return null;
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final id = json['id'] as String?;
+    return (id != null && id.isNotEmpty) ? id : null;
+  }
+
+  /// GET /me/playlists — paginated.
+  Future<SpotifyPlaylistPage> getUserPlaylists(
+    String accessToken, {
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    final response = await _http.get(
+      Uri.parse('${AppConstants.spotifyApiBase}/me/playlists?limit=$limit&offset=$offset'),
+      headers: <String, String>{'Authorization': 'Bearer $accessToken'},
+    ).timeout(_timeout);
+    if (response.statusCode < 200 || response.statusCode > 299) {
+      throw Exception('Spotify get playlists failed (${response.statusCode})');
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final items = json['items'] as List<dynamic>? ?? <dynamic>[];
+    final total = json['total'] as int? ?? 0;
+    return SpotifyPlaylistPage(
+      items: items.map((e) {
+        final p = e as Map<String, dynamic>;
+        return SpotifyPlaylistItem(
+          id: p['id'] as String? ?? '',
+          name: p['name'] as String? ?? '',
+        );
+      }).toList(growable: false),
+      total: total,
+    );
+  }
+
+  /// POST /users/{userId}/playlists — create a new playlist, returns its ID.
+  Future<String> createPlaylist(
+    String accessToken, {
+    required String userId,
+    required String name,
+    bool public = false,
+    String description = 'Managed by Like Spotify Mobile App',
+  }) async {
+    final response = await _http.post(
+      Uri.parse('${AppConstants.spotifyApiBase}/users/$userId/playlists'),
+      headers: <String, String>{
+        'Authorization': 'Bearer $accessToken',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(<String, dynamic>{
+        'name': name,
+        'public': public,
+        'description': description,
+      }),
+    ).timeout(_timeout);
+    if (response.statusCode < 200 || response.statusCode > 299) {
+      throw Exception('Spotify create playlist failed (${response.statusCode})');
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    return json['id'] as String;
+  }
+
+  /// POST /playlists/{playlistId}/tracks — add tracks by URI.
+  Future<void> addTracksToPlaylist(
+    String accessToken, {
+    required String playlistId,
+    required List<String> trackUris,
+  }) async {
+    final response = await _http.post(
+      Uri.parse('${AppConstants.spotifyApiBase}/playlists/$playlistId/tracks'),
+      headers: <String, String>{
+        'Authorization': 'Bearer $accessToken',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(<String, dynamic>{'uris': trackUris}),
+    ).timeout(_timeout);
+    if (response.statusCode < 200 || response.statusCode > 299) {
+      throw Exception('Spotify add to playlist failed (${response.statusCode})');
+    }
+  }
+
+  /// DELETE /playlists/{playlistId}/tracks — remove tracks by URI.
+  Future<void> removeTracksFromPlaylist(
+    String accessToken, {
+    required String playlistId,
+    required List<String> trackUris,
+  }) async {
+    final request = http.Request(
+      'DELETE',
+      Uri.parse('${AppConstants.spotifyApiBase}/playlists/$playlistId/tracks'),
+    );
+    request.headers['Authorization'] = 'Bearer $accessToken';
+    request.headers['Content-Type'] = 'application/json';
+    request.body = jsonEncode(<String, dynamic>{
+      'tracks': trackUris.map((uri) => <String, String>{'uri': uri}).toList(),
+    });
+
+    final streamed = await _http.send(request).timeout(_timeout);
+    if (streamed.statusCode < 200 || streamed.statusCode > 299) {
+      throw Exception('Spotify remove from playlist failed (${streamed.statusCode})');
+    }
+  }
+
+  /// PUT /me/following?type=artist — follow artists.
+  Future<void> followArtists(
+    String accessToken, {
+    required List<String> artistIds,
+  }) async {
+    final response = await _http.put(
+      Uri.parse(
+        '${AppConstants.spotifyApiBase}/me/following?type=artist&ids=${artistIds.join(",")}',
+      ),
+      headers: <String, String>{'Authorization': 'Bearer $accessToken'},
+    ).timeout(_timeout);
+    if (response.statusCode < 200 || response.statusCode > 299) {
+      throw Exception('Spotify follow artists failed (${response.statusCode})');
+    }
+  }
+
+  /// GET /me/tracks — paginated saved (liked) tracks.
+  Future<SpotifySavedTrackPage> getSavedTracks(
+    String accessToken, {
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    final response = await _http.get(
+      Uri.parse('${AppConstants.spotifyApiBase}/me/tracks?limit=$limit&offset=$offset'),
+      headers: <String, String>{'Authorization': 'Bearer $accessToken'},
+    ).timeout(_timeout);
+    if (response.statusCode < 200 || response.statusCode > 299) {
+      throw Exception('Spotify get saved tracks failed (${response.statusCode})');
+    }
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final items = json['items'] as List<dynamic>? ?? <dynamic>[];
+    final total = json['total'] as int? ?? 0;
+    return SpotifySavedTrackPage(
+      items: items.map((e) {
+        final saved = e as Map<String, dynamic>;
+        final track = saved['track'] as Map<String, dynamic>;
+        final artists = track['artists'] as List<dynamic>? ?? <dynamic>[];
+        return SpotifySavedTrack(
+          id: track['id'] as String? ?? '',
+          name: track['name'] as String? ?? '',
+          uri: track['uri'] as String? ?? '',
+          artists: artists.map((a) {
+            final artist = a as Map<String, dynamic>;
+            return SpotifySavedTrackArtist(
+              id: artist['id'] as String? ?? '',
+              name: artist['name'] as String? ?? '',
+            );
+          }).toList(growable: false),
+        );
+      }).toList(growable: false),
+      total: total,
+    );
+  }
+}
+
+/// Thrown when Spotify returns 401, signaling the caller should refresh and retry.
+class SpotifyAuthException implements Exception {
+  final String message;
+  SpotifyAuthException(this.message);
+  @override
+  String toString() => 'SpotifyAuthException: $message';
 }
