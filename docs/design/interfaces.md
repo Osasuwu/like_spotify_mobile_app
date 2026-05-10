@@ -55,7 +55,11 @@ class CurrentTrack:
 
 @dataclass
 class LikeContext:
-    """Mutable bag passed down a like pipeline. PostLikeActions read/write."""
+    """Mutable bag passed down a like pipeline. PostLikeActions read/write.
+
+    Mutable by design — the chain mutates `like_count` and `extras` in place.
+    Contrast with `CurrentTrack` which is frozen.
+    """
     track: CurrentTrack
     like_count: int | None = None       # populated by Storage; None if no Storage configured
     music_provider: "MusicProvider | None" = None  # resolved provider for this pipeline (for actions that downcast to provider-specific clients)
@@ -68,6 +72,15 @@ Rationale tie:
 
 - `provider` + `provider_track_id` instead of a synthetic global ID — Pano stores per-account caches keyed on `UserAccountSerializable`; same lesson, IDs don't cross providers.
 - `LikeContext.like_count` flows through the chain because PostLikeActions need to gate on it (best-of promote at threshold = 3). MA's event bus pattern (`subscribe(handle_event, EventType.MEDIA_ITEM_PLAYED)`) is the alternative — pub/sub. Rejected for Phase 1: explicit ordering matters here (count must be incremented before promote checks it), and the chain is short (~5 actions).
+
+Typed errors used by host branching are stubbed in `core/errors.py` (full surface in #21):
+
+```python
+# like_spotify/core/errors.py (stubs — full definitions in #21)
+class AuthError(Exception): ...        # token expired or revoked; host triggers re-auth
+class RateLimited(Exception): ...      # provider returned 429; host backs off
+class TransientError(Exception): ...   # network blip / 5xx; host retries with jitter
+```
 
 ### 2.2 Trigger
 
@@ -149,7 +162,7 @@ from .types import LikeContext
 
 class PreDecision(Enum):
     PROCEED = "proceed"
-    SKIP = "skip"        # don't like, don't run post-actions, do feedback (silent skip path)
+    SKIP = "skip"        # don't like, don't run post-actions; host shows neutral tray feedback (e.g. "already liked"), no error sound
 
 class PreLikeAction(ABC):
     """Run before MusicProvider.like(). Can short-circuit the pipeline.
@@ -247,6 +260,7 @@ Rationale tie:
 
 - `increment_and_get_count` returns `int | None`, not `Result`-style — `None` semantically encodes "I don't know" (see today's `supabase_increment` returning `None` on failure, and the best-of gate quietly skipping). Promotes the existing implicit contract to explicit.
 - Key is `(user_id, provider_track_id)` — single-provider scope for Phase 1 matches today's `desktop/like_spotify.py` reality. The `LikeRecord.provider` field carries the source for the audit log so backfill can disambiguate later, but the live counter is single-keyed.
+- **Multi-provider migration path** (when a second `MusicProvider` lands): add `provider: str` arg to `increment_and_get_count`, default it to the configured single-provider domain for backwards compat, and migrate the live counter table by treating the existing rows as belonging to that provider. Storage authors landing in Phase 1 can rely on the single-key semantics; the migration is additive, not breaking.
 - `backfill` is on the same interface (not a separate `Backfillable`): MA's lesson — capability flags on a single base class read better than a proliferation of optional mixins, **as long as the count is small** (we have one optional method, not ten).
 
 ---
@@ -272,6 +286,7 @@ like_spotify/extensions/<domain>/
 {
   "domain": "spotify",
   "extension_point": "music_provider",
+  "_extension_point_values": "trigger | pre_like_action | music_provider | post_like_action | storage",
   "name": "Spotify",
   "description": "Reads currently-playing and likes via Spotify Web API.",
   "codeowners": ["@Osasuwu"],
@@ -325,7 +340,7 @@ The filesystem path also keeps the **default-flavor-as-folders** invariant: `ext
 3. **Pano's `Result<T>` everywhere** — Python idiom is exceptions; `Result` becomes noise. Keep typed exceptions (`AuthError`, `RateLimited`, `TransientError`) for the cases the host actually branches on.
 4. **Pano's `Scrobblables` global singleton with `@Synchronized` cache** — global mutable instance registries hide lifecycle bugs. Host owns instances explicitly, passes them into the pipeline.
 5. **MA's `app_var(12)` opaque-index built-in API key fallback** — works for them because they ship default LastFM keys; for us, every secret is named (`SPOTIFY_CLIENT_ID`, etc.) in `.env`. No hidden defaults.
-6. **MA's `SUPPORTED_FEATURES: set[ProviderFeature]` capability bag** — premature at five extension points and ~5 reference impls in Phase 1. The base-class method set IS the contract. Revisit only when we have a real third axis (≥3 implementations of one interface that genuinely differ in capability).
+6. **MA's `SUPPORTED_FEATURES: set[ProviderFeature]` capability bag** — premature at five extension points and ~5 reference impls in Phase 1. The base-class method set IS the contract. Revisit only when we have a real third axis (≥3 implementations of one interface that genuinely differ in capability). Note: a single `raise NotImplementedError` in an optional method (e.g. `Storage.backfill`) is acceptable — the caller already wraps in `try`. The flag-bag becomes a problem at ≥5 flags, when callers grow conditional trees against them.
 7. **MA's mandatory `multi_instance`/`builtin` manifest fields** — copy the names later if needed; not in Phase 1 (no instance management UI yet).
 8. **Per-extension event bus** (MA's `mass.subscribe(handle_event, EventType.MEDIA_ITEM_PLAYED)`) — pub/sub is great when ordering doesn't matter and there are many subscribers. Our PostLikeActions need explicit ordering (count → promote gate). Sequential chain is the right shape; pub/sub becomes useful only when Phase 2's Android port adds parallel listeners.
 9. **Sync `setup()` like MA's older providers used to have** — every extension is `async def` from day one. Mixed sync+async chains are the worst of both. Sync impls (default Spotify port using `requests`) wrap their I/O in `asyncio.to_thread`.
