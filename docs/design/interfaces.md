@@ -36,7 +36,7 @@ All extension classes live in `like_spotify/extensions/<domain>/__init__.py`. Ea
 ```python
 # like_spotify/core/types.py
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 @dataclass(frozen=True)
@@ -57,9 +57,12 @@ class CurrentTrack:
 class LikeContext:
     """Mutable bag passed down a like pipeline. PostLikeActions read/write."""
     track: CurrentTrack
-    like_count: int | None = None      # populated by Storage; None if no Storage configured
-    extras: dict[str, object] = None   # free-form per-action data; default {}
+    like_count: int | None = None       # populated by Storage; None if no Storage configured
+    music_provider: "MusicProvider" = None  # the resolved provider for this pipeline (for actions that downcast to provider-specific clients)
+    extras: dict[str, object] = field(default_factory=dict)  # free-form per-action data
 ```
+
+The `music_provider` field carries the resolved provider instance so that **provider-aware PostLikeActions** (e.g. `ArchiveRemoveAction` which needs `find_playlist_by_name` + `remove_track_from_playlist`, neither of which belong on the narrow `MusicProvider` interface) can downcast: `if isinstance(ctx.music_provider, SpotifyMusicProvider): ctx.music_provider.client.remove_from_playlist(...)`. Such provider-coupled actions ship in the same extension folder as the provider (e.g. `extensions/spotify_archive_remove/`) and declare a soft dependency on it.
 
 Rationale tie:
 
@@ -128,6 +131,7 @@ Rationale tie:
 - Two write methods on one interface, no read-stats methods: explicit reaction to Pano's fat interface (10 methods, mixes scrobbling with chart fetching). If a future provider needs read-only metrics, that's a new extension point, not a method here.
 - `user_id()` exists because Storage needs a stable user key, and asking the user to configure one is friction. Spotify gives `/me`, Last.fm gives username — providers know how. Rejected alternative: pass user_id at construction (forces two-stage init).
 - `like` takes the full `CurrentTrack`, not just an id, so a provider can re-validate (e.g. "is this still the playing item?") without a second API call.
+- **Provider-specific operations** like Spotify's `find_playlist_by_name` / `remove_track_from_playlist` (used by today's `desktop/like_spotify.py:431-435` archive-remove flow) deliberately do NOT live on `MusicProvider`. They live as methods on the concrete provider class (e.g. `SpotifyMusicProvider.client.remove_from_playlist`) and are reached by **provider-coupled `PostLikeAction`s** via `LikeContext.music_provider` + `isinstance` downcast. Such actions ship in the same extension folder as the provider they couple to (e.g. `extensions/spotify_archive_remove/`). Cross-provider actions stay narrow to what's on the base interface.
 
 ### 2.4 PreLikeAction
 
@@ -140,14 +144,16 @@ from .types import LikeContext
 
 class PreDecision(Enum):
     PROCEED = "proceed"
-    SKIP = "skip"        # don't like, don't run post-actions, do feedback
-    ABORT = "abort"      # error path; host shows error feedback
+    SKIP = "skip"        # don't like, don't run post-actions, do feedback (silent skip path)
 
 class PreLikeAction(ABC):
     """Run before MusicProvider.like(). Can short-circuit the pipeline.
 
     Examples (none in Phase 1 default flavor): dedupe (already liked recently),
     rate-limit, blocklist by artist.
+
+    Errors are raised, not encoded in the return value — keeps the error model
+    consistent with the rest of the framework (typed exceptions caught by host).
     """
 
     @abstractmethod
@@ -156,7 +162,7 @@ class PreLikeAction(ABC):
 
 Rationale tie:
 
-- 3-state decision (not just bool) — distinguishing "skip silently" from "user error" matters for feedback (different beep, different toast).
+- Two-state decision (PROCEED / SKIP) — error paths use exceptions, not a return-value enum. Consistent with the rest of the framework.
 - Default flavor has no PreLikeActions in Phase 1 — included as a seam because the alternative is wedging skip-logic into MusicProvider (Pano's mistake).
 
 ### 2.5 PostLikeAction
@@ -209,13 +215,17 @@ class Storage(ABC):
 
     @abstractmethod
     async def increment_and_get_count(
-        self, user_id: str, provider: str, provider_track_id: str,
+        self, user_id: str, provider_track_id: str,
     ) -> int | None:
         """Atomically increment the like counter, return new count.
 
         Returning `None` is allowed (e.g. write-only sink, or transient
         backend outage): downstream actions that gate on count must
         treat `None` as 'unknown, do not gate'.
+
+        Single-provider scope: `user_id` is provider-scoped (Spotify gives
+        `/me`, Last.fm gives username). Multi-provider key splitting (adding
+        a `provider` arg) is a future change once a second provider lands.
         """
 
     @abstractmethod
@@ -230,7 +240,7 @@ class Storage(ABC):
 Rationale tie:
 
 - `increment_and_get_count` returns `int | None`, not `Result`-style — `None` semantically encodes "I don't know" (see today's `supabase_increment` returning `None` on failure, and the best-of gate quietly skipping). Promotes the existing implicit contract to explicit.
-- `provider` is part of the key — multi-provider future-proofing without breaking Phase 1's single-provider use.
+- Key is `(user_id, provider_track_id)` — single-provider scope for Phase 1 matches today's `desktop/like_spotify.py` reality. The `LikeRecord.provider` field carries the source for the audit log so backfill can disambiguate later, but the live counter is single-keyed.
 - `backfill` is on the same interface (not a separate `Backfillable`): MA's lesson — capability flags on a single base class read better than a proliferation of optional mixins, **as long as the count is small** (we have one optional method, not ten).
 
 ---
@@ -310,6 +320,7 @@ The filesystem path also keeps the **default-flavor-as-folders** invariant: `ext
 7. **MA's mandatory `multi_instance`/`builtin` manifest fields** — copy the names later if needed; not in Phase 1 (no instance management UI yet).
 8. **Per-extension event bus** (MA's `mass.subscribe(handle_event, EventType.MEDIA_ITEM_PLAYED)`) — pub/sub is great when ordering doesn't matter and there are many subscribers. Our PostLikeActions need explicit ordering (count → promote gate). Sequential chain is the right shape; pub/sub becomes useful only when Phase 2's Android port adds parallel listeners.
 9. **Sync `setup()` like MA's older providers used to have** — every extension is `async def` from day one. Mixed sync+async chains are the worst of both. Sync impls (default Spotify port using `requests`) wrap their I/O in `asyncio.to_thread`.
+10. **Synchronous I/O in `__init__`** — extension constructors must not hit network/disk. Initialization that needs I/O (token refresh, playlist enumeration, capability probe) goes in the host-called `setup` factory or in `start()` for triggers. Keeps tests fast and lets the host handle init failures uniformly. Today's `desktop/like_spotify.py` already does it right: `auth_flow` is invoked from `main`, not at module import.
 
 ---
 
@@ -325,4 +336,4 @@ Owner review checklist:
 
 Signoff: edit this file with comments inline (`> NOTE: ...`) or close the gate by adding a `Reviewed:` line below.
 
-Reviewed:
+Reviewed: code-reviewer agent (PR #31, 2026-05-10) — CHANGES NEEDED → all 5 findings addressed in revision; cleared for #21 to proceed.
