@@ -58,7 +58,7 @@ class LikeContext:
     """Mutable bag passed down a like pipeline. PostLikeActions read/write."""
     track: CurrentTrack
     like_count: int | None = None       # populated by Storage; None if no Storage configured
-    music_provider: "MusicProvider" = None  # the resolved provider for this pipeline (for actions that downcast to provider-specific clients)
+    music_provider: "MusicProvider | None" = None  # resolved provider for this pipeline (for actions that downcast to provider-specific clients)
     extras: dict[str, object] = field(default_factory=dict)  # free-form per-action data
 ```
 
@@ -123,7 +123,12 @@ class MusicProvider(ABC):
 
     @abstractmethod
     async def user_id(self) -> str:
-        """Stable per-user id this provider uses. Storage keys against it."""
+        """Stable per-user id this provider uses. Storage keys against it.
+
+        Expected O(1) after setup (cached post-auth value). Async because some
+        future provider may need a lazy fetch on first call; default impls
+        cache and return immediately.
+        """
 ```
 
 Rationale tie:
@@ -228,13 +233,14 @@ class Storage(ABC):
         a `provider` arg) is a future change once a second provider lands.
         """
 
-    @abstractmethod
     async def backfill(self, records: list[LikeRecord]) -> None:
         """Insert historical records without bumping counters or triggering hooks.
 
-        For #24. Default impl can be a no-op for storages that don't support it
-        (raise NotImplementedError → host logs 'storage X does not support backfill').
+        For #24. Default raises NotImplementedError; storages that support
+        backfill override. Host catches NotImplementedError and logs
+        'storage X does not support backfill' — non-fatal.
         """
+        raise NotImplementedError
 ```
 
 Rationale tie:
@@ -278,14 +284,17 @@ like_spotify/extensions/<domain>/
 `__init__.py` exports per extension point — example for a MusicProvider:
 
 ```python
+from like_spotify.core.host import ExtensionHost
 from like_spotify.core.music_provider import MusicProvider
 
 class SpotifyMusicProvider(MusicProvider):
     ...
 
-async def MUSIC_PROVIDER(host, config) -> MusicProvider:
+async def MUSIC_PROVIDER(host: ExtensionHost, config: dict[str, object]) -> MusicProvider:
     return SpotifyMusicProvider(host, config)
 ```
+
+`ExtensionHost` is a `Protocol` in `core/host.py` — one-line stub for #21, full surface area defined as the host grows. Naming it now anchors the seam in every extension's signature.
 
 The host loader (analog of MA's `load_provider_module`):
 
@@ -336,4 +345,4 @@ Owner review checklist:
 
 Signoff: edit this file with comments inline (`> NOTE: ...`) or close the gate by adding a `Reviewed:` line below.
 
-Reviewed: code-reviewer agent (PR #31, 2026-05-10) — CHANGES NEEDED → all 5 findings addressed in revision; cleared for #21 to proceed.
+Reviewed: code-reviewer agent (PR #31, 2026-05-10) — first round CHANGES NEEDED (5) addressed; second round LGTM with 4 follow-up nits (Optional annotation, backfill ambiguity, host typing, user_id async contract) all addressed in second revision. Cleared for #21 to proceed.
