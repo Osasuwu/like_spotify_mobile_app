@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "like-spotify"
+version = "0.1.0"
+description = "Pluggable hotkey-to-like framework. Default flavor: tray hotkey + Spotify."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Osasuwu" }]
+keywords = ["spotify", "hotkey", "tray", "media", "like"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "requests>=2.31",
+    "keyboard>=0.13",
+    "pystray>=0.19",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+like-spotify = "like_spotify.hosts.tray:main"
+
+[project.urls]
+Repository = "https://github.com/Osasuwu/like_spotify_mobile_app"
+Issues    = "https://github.com/Osasuwu/like_spotify_mobile_app/issues"
+
+[tool.setuptools.packages.find]
+include = ["like_spotify*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+"like_spotify.extensions.spotify" = ["manifest.json"]
+"like_spotify.extensions.tray_hotkey_trigger" = ["manifest.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

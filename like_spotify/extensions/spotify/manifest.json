@@ -1,0 +1,10 @@
+{
+  "domain": "spotify",
+  "extension_point": "music_provider",
+  "name": "Spotify",
+  "description": "Reads currently-playing and likes via Spotify Web API (OAuth 2.0 PKCE).",
+  "codeowners": ["@Osasuwu"],
+  "requirements": ["requests>=2.31"],
+  "documentation": "https://github.com/Osasuwu/like_spotify_mobile_app/blob/main/like_spotify/extensions/spotify/README.md",
+  "stage": "stable"
+}

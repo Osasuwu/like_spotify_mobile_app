@@ -1,0 +1,10 @@
+{
+  "domain": "tray_hotkey_trigger",
+  "extension_point": "trigger",
+  "name": "Tray Hotkey",
+  "description": "Global keyboard hotkey (default Ctrl+Shift+Alt+W) emits a like intent.",
+  "codeowners": ["@Osasuwu"],
+  "requirements": ["keyboard>=0.13"],
+  "documentation": "https://github.com/Osasuwu/like_spotify_mobile_app/blob/main/like_spotify/extensions/tray_hotkey_trigger/README.md",
+  "stage": "stable"
+}

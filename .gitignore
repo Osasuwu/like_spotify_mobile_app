@@ -47,3 +47,11 @@ app.*.map.json
 
 # Secrets
 .env
+
+# Python / PyInstaller (like_spotify desktop package)
+__pycache__/
+*.egg-info/
+.pytest_cache/
+/dist/
+tools/build/
+tools/dist/
