@@ -12,20 +12,7 @@
 setlocal
 pushd "%~dp0\.."
 
-python -m PyInstaller ^
-    --noconfirm ^
-    --windowed ^
-    --onefile ^
-    --name LikeSpotify ^
-    --hidden-import keyboard ^
-    --hidden-import keyboard._winkeyboard ^
-    --hidden-import pystray ^
-    --hidden-import pystray._win32 ^
-    --hidden-import PIL._tkinter_finder ^
-    --hidden-import like_spotify.extensions.spotify ^
-    --hidden-import like_spotify.extensions.tray_hotkey_trigger ^
-    --collect-data like_spotify ^
-    -m like_spotify
+python -m PyInstaller --noconfirm tools\LikeSpotify.spec
 
 popd
 endlocal
