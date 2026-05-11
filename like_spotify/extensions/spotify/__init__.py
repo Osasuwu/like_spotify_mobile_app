@@ -1,0 +1,256 @@
+"""Spotify MusicProvider — default flavor.
+
+Ported from `tools/spotify_liker.py`. Sync `requests` wrapped in
+`asyncio.to_thread` so the extension presents an async surface without
+rewriting the I/O. PKCE OAuth, tokens stored under the host config dir.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import http.server
+import json
+import secrets
+import socketserver
+import threading
+import time
+import urllib.parse
+import webbrowser
+from pathlib import Path
+
+import requests
+
+from like_spotify.core.errors import AuthError, RateLimited, TransientError
+from like_spotify.core.music_provider import MusicProvider
+from like_spotify.core.types import CurrentTrack
+
+DOMAIN = "spotify"
+
+AUTH_URL = "https://accounts.spotify.com/authorize"
+TOKEN_URL = "https://accounts.spotify.com/api/token"
+API_BASE = "https://api.spotify.com/v1"
+
+REDIRECT_PORT = 8793
+REDIRECT_URI = f"http://127.0.0.1:{REDIRECT_PORT}/callback"
+SCOPES = "user-library-modify user-library-read user-read-playback-state"
+
+
+class SpotifyMusicProvider(MusicProvider):
+    def __init__(self, client_id: str, token_path: Path) -> None:
+        if not client_id:
+            raise ValueError("spotify client_id is required")
+        self._client_id = client_id
+        self._token_path = token_path
+        self._tokens: dict = _load_tokens(token_path)
+        self._lock = threading.Lock()
+        self._user_id_cache: str | None = None
+
+    # ── MusicProvider ─────────────────────────────────────────────────
+
+    async def get_currently_playing(self) -> CurrentTrack | None:
+        return await asyncio.to_thread(self._get_currently_playing_sync)
+
+    async def like(self, track: CurrentTrack) -> None:
+        await asyncio.to_thread(self._like_sync, track.provider_track_id)
+
+    async def user_id(self) -> str:
+        if self._user_id_cache:
+            return self._user_id_cache
+        self._user_id_cache = await asyncio.to_thread(self._fetch_user_id_sync)
+        return self._user_id_cache
+
+    # ── Auth (sync, called from setup; safe outside event loop) ───────
+
+    @property
+    def has_tokens(self) -> bool:
+        return bool(self._tokens.get("access_token"))
+
+    def authorize(self) -> None:
+        """PKCE flow: open browser, wait for callback, persist tokens."""
+        verifier = secrets.token_urlsafe(64)[:96]
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            .rstrip(b"=")
+            .decode()
+        )
+        state = secrets.token_hex(8)
+        params = {
+            "client_id": self._client_id,
+            "response_type": "code",
+            "redirect_uri": REDIRECT_URI,
+            "code_challenge_method": "S256",
+            "code_challenge": challenge,
+            "state": state,
+            "scope": SCOPES,
+        }
+        url = f"{AUTH_URL}?{urllib.parse.urlencode(params)}"
+
+        captured: dict[str, str | None] = {"code": None, "state": None}
+        event = threading.Event()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                captured["code"] = qs.get("code", [None])[0]
+                captured["state"] = qs.get("state", [None])[0]
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(
+                    b"<h2 style='font-family:sans-serif;margin:40px'>"
+                    b"Authorized! You can close this tab.</h2>"
+                )
+                event.set()
+
+            def log_message(self, *_args):
+                pass
+
+        server = socketserver.TCPServer(("127.0.0.1", REDIRECT_PORT), Handler)
+        threading.Thread(target=server.handle_request, daemon=True).start()
+        webbrowser.open(url)
+        event.wait(timeout=120)
+        server.server_close()
+
+        if not captured["code"]:
+            raise AuthError("authorization timed out (120s)")
+        if captured["state"] != state:
+            raise AuthError("state mismatch in OAuth callback")
+
+        r = requests.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "code": captured["code"],
+                "redirect_uri": REDIRECT_URI,
+                "client_id": self._client_id,
+                "code_verifier": verifier,
+            },
+            timeout=10,
+        )
+        if r.status_code >= 400:
+            raise AuthError(f"token exchange failed ({r.status_code}): {r.text}")
+        self._tokens = _augment_tokens(r.json())
+        _save_tokens(self._token_path, self._tokens)
+
+    # ── Internals ─────────────────────────────────────────────────────
+
+    def _access_token(self) -> str:
+        with self._lock:
+            if not self._tokens.get("refresh_token") and not self._tokens.get("access_token"):
+                raise AuthError("not authenticated; run `like-spotify --setup` first")
+            if time.time() > self._tokens.get("expires_at", 0) - 60:
+                self._refresh_locked()
+            return self._tokens["access_token"]
+
+    def _refresh_locked(self) -> None:
+        r = requests.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": self._tokens["refresh_token"],
+                "client_id": self._client_id,
+            },
+            timeout=10,
+        )
+        if r.status_code in (400, 401):
+            raise AuthError(f"refresh rejected ({r.status_code}): {r.text}")
+        if r.status_code >= 500:
+            raise TransientError(f"token endpoint 5xx: {r.status_code}")
+        if r.status_code >= 400:
+            raise AuthError(f"token refresh failed: {r.status_code} {r.text}")
+        fresh = r.json()
+        self._tokens["access_token"] = fresh["access_token"]
+        self._tokens["expires_at"] = time.time() + fresh["expires_in"]
+        if "refresh_token" in fresh:
+            self._tokens["refresh_token"] = fresh["refresh_token"]
+        _save_tokens(self._token_path, self._tokens)
+
+    def _get_currently_playing_sync(self) -> CurrentTrack | None:
+        token = self._access_token()
+        r = requests.get(
+            f"{API_BASE}/me/player/currently-playing",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        if r.status_code == 204:
+            return None
+        _raise_for_status(r)
+        item = r.json().get("item")
+        if not item:
+            return None
+        return CurrentTrack(
+            provider=DOMAIN,
+            provider_track_id=item["id"],
+            title=item.get("name", ""),
+            artists=tuple(a["name"] for a in item.get("artists", []) if a.get("name")),
+            artist_ids=tuple(a["id"] for a in item.get("artists", []) if a.get("id")),
+            album=(item.get("album") or {}).get("name"),
+        )
+
+    def _like_sync(self, track_id: str) -> None:
+        token = self._access_token()
+        r = requests.put(
+            f"{API_BASE}/me/tracks",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"ids": track_id},
+            timeout=5,
+        )
+        _raise_for_status(r)
+
+    def _fetch_user_id_sync(self) -> str:
+        token = self._access_token()
+        r = requests.get(
+            f"{API_BASE}/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        _raise_for_status(r)
+        uid = r.json().get("id")
+        if not uid:
+            raise AuthError("/me did not return an id")
+        return uid
+
+
+# ── Module-level helpers ──────────────────────────────────────────────
+
+
+def _load_tokens(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_tokens(path: Path, tokens: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+
+
+def _augment_tokens(payload: dict) -> dict:
+    tokens = dict(payload)
+    tokens["expires_at"] = time.time() + tokens.get("expires_in", 3600)
+    return tokens
+
+
+def _raise_for_status(r: requests.Response) -> None:
+    if 200 <= r.status_code < 300:
+        return
+    if r.status_code in (401, 403):
+        raise AuthError(f"{r.status_code} {r.text}")
+    if r.status_code == 429:
+        raise RateLimited(r.headers.get("Retry-After", "1"))
+    if r.status_code >= 500:
+        raise TransientError(f"{r.status_code} {r.text}")
+    raise RuntimeError(f"spotify API {r.status_code}: {r.text}")
+
+
+# ── Factory export (filesystem-convention sentinel) ───────────────────
+
+
+def MUSIC_PROVIDER(client_id: str, token_path: Path) -> SpotifyMusicProvider:
+    """Factory called by the host. Signature widens in #28 (manifest deps)."""
+    return SpotifyMusicProvider(client_id=client_id, token_path=token_path)

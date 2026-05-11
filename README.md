@@ -39,17 +39,31 @@ flutter build apk --release --dart-define-from-file=.env
 
 Install the APK, connect Spotify in the app, enable the listener service.
 
-### 3. Desktop (Windows / macOS / Linux)
+### 3. Desktop (Windows)
+
+The desktop side ships as a pluggable Python package (`like_spotify/`) — tray
+host + default flavor (`tray_hotkey_trigger` + `spotify` provider). The
+broader plugin framework lands across [#19](https://github.com/Osasuwu/like_spotify_mobile_app/issues/19); Phase 1
+tracer is [#21](https://github.com/Osasuwu/like_spotify_mobile_app/issues/21).
 
 ```bash
-pip install requests
-cd desktop
-python like_spotify.py --config   # creates config file
-# Edit ~/.like_spotify/config.json — set client_id
-python like_spotify.py --auth     # one-time browser auth
+git clone https://github.com/Osasuwu/like_spotify_mobile_app.git
+cd like_spotify_mobile_app
+pipx install -e .           # or: pip install -e .
+
+like-spotify --setup        # interactive Client ID + browser OAuth
+like-spotify                # tray host; default hotkey Ctrl+Shift+Alt+W
 ```
 
-Bind `pythonw like_spotify.py` to a keyboard shortcut. See [desktop/README.md](desktop/README.md) for details.
+Or build a single-file Windows EXE: `tools\build.bat` →
+`dist\LikeSpotify.exe`.
+
+Storage (Supabase counter), best-of promotion, archive-remove, and
+artist-follow land in follow-up issues
+([#22](https://github.com/Osasuwu/like_spotify_mobile_app/issues/22),
+[#23](https://github.com/Osasuwu/like_spotify_mobile_app/issues/23),
+[#26](https://github.com/Osasuwu/like_spotify_mobile_app/issues/26))
+— the tracer bullet does likes only.
 
 ### 4. Cross-device counters (optional)
 
@@ -81,25 +95,25 @@ Like counters are shared across devices via [Supabase](https://supabase.com) (fr
    ALTER TABLE public.track_likes ENABLE ROW LEVEL SECURITY;
    CREATE POLICY "anon_full_access" ON public.track_likes FOR ALL USING (true) WITH CHECK (true);
    ```
-3. Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to `.env` (Android) and `~/.like_spotify/config.json` (desktop)
+3. Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to `.env` (Android). Desktop wiring lands in [#22](https://github.com/Osasuwu/like_spotify_mobile_app/issues/22) (`SupabaseStorage`).
 
 Without Supabase, counters are stored locally per device.
 
 ## Architecture
 
 ```
-Android (Flutter + Kotlin)          Desktop (Python)
-┌──────────────────────┐           ┌──────────────────┐
-│  MediaSession        │           │  OS hotkey        │
-│  pause-play pattern  │           │  like_spotify.py  │
-│       ↓              │           │       ↓           │
-│  SpotifyLikeWorker   │           │  Spotify API      │
-│  • like track        │           │  • like track     │
-│  • remove from       │           │  • remove from    │
-│    archive           │           │    archive        │
-│  • Supabase counter  │           │  • Supabase       │
-│  • best-of / follow  │           │    counter        │
-└──────┬───────────────┘           └──────┬───────────┘
+Android (Flutter + Kotlin)          Desktop (Python framework)
+┌──────────────────────┐           ┌──────────────────────────┐
+│  MediaSession        │           │  Trigger (hotkey/tray)   │
+│  pause-play pattern  │           │       ↓                  │
+│       ↓              │           │  MusicProvider (Spotify) │
+│  SpotifyLikeWorker   │           │  • like track            │
+│  • like track        │           │  Storage  → #22          │
+│  • remove from       │           │  PostLikeAction → #23/26 │
+│    archive           │           │    · archive remove      │
+│  • Supabase counter  │           │    · best-of promote     │
+│  • best-of / follow  │           │    · artist follow       │
+└──────┬───────────────┘           └──────┬───────────────────┘
        │                                  │
        └──────────┬───────────────────────┘
                   ↓
@@ -109,16 +123,16 @@ Android (Flutter + Kotlin)          Desktop (Python)
 
 - `lib/` — Flutter app (Dart): UI, state management (Riverpod), Spotify OAuth
 - `android/.../kotlin/` — Native Android: foreground service, MediaSession, background worker
-- `desktop/` — Python script: OAuth PKCE, Spotify API, desktop notifications
+- `like_spotify/` — Python desktop package: `core/` (ABCs), `hosts/` (tray runtime), `extensions/` (default Spotify provider + tray-hotkey trigger), `samples/` (alt-flavor examples)
 
 ## Configuration
 
 | Setting | Android | Desktop |
 |---------|---------|---------|
-| Trigger pattern | In-app UI | N/A (hotkey) |
-| Archive playlist name | In-app UI | `~/.like_spotify/config.json` |
-| Best-of playlist name | In-app UI | `~/.like_spotify/config.json` |
-| Like threshold for best-of | 3 (default) | 3 (default) |
+| Trigger pattern / hotkey | In-app UI | `~/.like_spotify/config.json` → `trigger.hotkey` (default `Ctrl+Shift+Alt+W`) |
+| Spotify client_id | `.env` (`SPOTIFY_CLIENT_ID`) | `like-spotify --setup` → `~/.like_spotify/config.json` |
+| Spotify tokens | `FlutterSecureStorage` | `~/.like_spotify/spotify_token.json` |
+| Archive / best-of / follow | In-app UI | (lands in #22 / #23 / #26) |
 
 ## License
 
