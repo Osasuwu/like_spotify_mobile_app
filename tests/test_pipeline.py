@@ -3,6 +3,7 @@
 Slices:
     #21 — tracer-bullet currently_playing → like → feedback.
     #22 — Storage wiring + count in feedback title.
+    #23 — Pre/PostLikeAction chains.
     #24 — backfill probe (is_liked → was_already_liked → Storage.increment).
 
 Network / keyboard / tray are not exercised — we mock MusicProvider +
@@ -13,10 +14,11 @@ from __future__ import annotations
 
 import pytest
 
+from like_spotify.core.actions import PostLikeAction, PreLikeAction
 from like_spotify.core.music_provider import MusicProvider
 from like_spotify.core.pipeline import Pipeline
 from like_spotify.core.storage import Storage
-from like_spotify.core.types import CurrentTrack
+from like_spotify.core.types import CurrentTrack, LikeContext
 
 
 class FakeProvider(MusicProvider):
@@ -283,3 +285,126 @@ async def test_is_liked_probed_before_like() -> None:
     ).run_once()
 
     assert call_order == ["is_liked", "like"]
+
+
+# ── #23: Pre/Post action chains ────────────────────────────────────────
+
+
+class RecordingPre(PreLikeAction):
+    """PreLikeAction that records calls and returns a configurable verdict."""
+
+    def __init__(self, proceed: bool = True, raises: Exception | None = None):
+        self.proceed = proceed
+        self.raises = raises
+        self.calls: list[LikeContext] = []
+
+    async def run(self, ctx: LikeContext) -> bool:
+        self.calls.append(ctx)
+        if self.raises is not None:
+            raise self.raises
+        return self.proceed
+
+
+class RecordingPost(PostLikeAction):
+    """PostLikeAction that records calls and optionally raises."""
+
+    def __init__(self, raises: Exception | None = None):
+        self.raises = raises
+        self.calls: list[LikeContext] = []
+
+    async def run(self, ctx: LikeContext) -> None:
+        self.calls.append(ctx)
+        if self.raises is not None:
+            raise self.raises
+
+
+@pytest.mark.asyncio
+async def test_pre_action_returning_false_aborts_like() -> None:
+    provider = FakeProvider(track=_track())
+    pre = RecordingPre(proceed=False)
+    fb = Feedback()
+
+    await Pipeline(
+        provider=provider, feedback=fb, pre_like_actions=[pre]
+    ).run_once()
+
+    assert pre.calls and pre.calls[0].track == _track()
+    assert provider.like_calls == []
+    success, title, _ = fb.calls[0]
+    assert success is False
+    assert "RecordingPre" in title
+
+
+@pytest.mark.asyncio
+async def test_pre_action_returning_true_proceeds() -> None:
+    provider = FakeProvider(track=_track())
+    pre = RecordingPre(proceed=True)
+    fb = Feedback()
+
+    await Pipeline(
+        provider=provider, feedback=fb, pre_like_actions=[pre]
+    ).run_once()
+
+    assert provider.like_calls == [_track()]
+    assert fb.calls[0][:2] == (True, "Liked")
+
+
+@pytest.mark.asyncio
+async def test_pre_action_exception_is_skip_not_abort() -> None:
+    """A raising pre-action is logged and skipped; later actions and the
+    like itself still proceed. Independence is the contract."""
+    provider = FakeProvider(track=_track())
+    flaky = RecordingPre(raises=RuntimeError("flaky"))
+    healthy = RecordingPre(proceed=True)
+    fb = Feedback()
+
+    await Pipeline(
+        provider=provider, feedback=fb, pre_like_actions=[flaky, healthy]
+    ).run_once()
+
+    assert flaky.calls and healthy.calls
+    assert provider.like_calls == [_track()]
+
+
+@pytest.mark.asyncio
+async def test_post_action_runs_after_successful_like() -> None:
+    provider = FakeProvider(track=_track())
+    post = RecordingPost()
+    fb = Feedback()
+
+    await Pipeline(
+        provider=provider, feedback=fb, post_like_actions=[post]
+    ).run_once()
+
+    assert post.calls and post.calls[0].track == _track()
+    assert fb.calls[0][:2] == (True, "Liked")
+
+
+@pytest.mark.asyncio
+async def test_post_action_not_run_when_like_fails() -> None:
+    provider = FakeProvider(track=_track(), like_raises=RuntimeError("nope"))
+    post = RecordingPost()
+
+    await Pipeline(
+        provider=provider, feedback=Feedback(), post_like_actions=[post]
+    ).run_once()
+
+    assert post.calls == []
+
+
+@pytest.mark.asyncio
+async def test_post_action_failure_does_not_abort_chain() -> None:
+    """AC: if first PostLikeAction throws, second still runs."""
+    provider = FakeProvider(track=_track())
+    broken = RecordingPost(raises=RuntimeError("boom"))
+    healthy = RecordingPost()
+    fb = Feedback()
+
+    await Pipeline(
+        provider=provider,
+        feedback=fb,
+        post_like_actions=[broken, healthy],
+    ).run_once()
+
+    assert broken.calls and healthy.calls
+    assert fb.calls[0][0] is True  # Like still reported as success.
