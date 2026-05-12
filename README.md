@@ -39,35 +39,64 @@ flutter build apk --release --dart-define-from-file=.env
 
 Install the APK, connect Spotify in the app, enable the listener service.
 
-### 3. Desktop (Windows)
+### 3. Desktop
 
-The desktop side ships as a pluggable Python package (`like_spotify/`) — tray
-host + default flavor (`tray_hotkey_trigger` + `spotify` provider). The
-broader plugin framework lands across [#19](https://github.com/Osasuwu/like_spotify_mobile_app/issues/19); Phase 1
-tracer is [#21](https://github.com/Osasuwu/like_spotify_mobile_app/issues/21).
+The desktop side ships as a pluggable Python package (`like_spotify/`) —
+a tray host + global hotkey on Windows, a CLI fallback (`like-once`) on
+macOS / Linux, and a multi-backend counter Storage (Supabase or Google
+Sheets).
 
-```bash
+**One-liner installs.** Run from a fresh clone:
+
+```powershell
+# Windows (PowerShell)
 git clone https://github.com/Osasuwu/like_spotify_mobile_app.git
 cd like_spotify_mobile_app
-pipx install -e .           # or: pip install -e .
-
-like-spotify --setup        # interactive Client ID + browser OAuth
-like-spotify                # tray host; default hotkey Ctrl+Shift+Alt+W
+.\install.ps1
 ```
 
-Or build a single-file Windows EXE: `tools\build.bat` →
-`dist\LikeSpotify.exe`.
+```bash
+# macOS / Linux
+git clone https://github.com/Osasuwu/like_spotify_mobile_app.git
+cd like_spotify_mobile_app
+./install.sh
+```
 
-Storage (Supabase counter), best-of promotion, archive-remove, and
-artist-follow land in follow-up issues
-([#22](https://github.com/Osasuwu/like_spotify_mobile_app/issues/22),
-[#23](https://github.com/Osasuwu/like_spotify_mobile_app/issues/23),
-[#26](https://github.com/Osasuwu/like_spotify_mobile_app/issues/26))
-— the tracer bullet does likes only.
+The installer checks for Python 3.11+, installs `pipx` if missing,
+installs the `like-spotify` package, then walks you through the
+interactive setup wizard:
+
+1. **Spotify** — paste a Client ID from
+   [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+   (redirect URI: `http://127.0.0.1:8793/callback`); a browser opens
+   for PKCE OAuth.
+2. **Storage** — pick `supabase`, `sheets`, or `none` (likes work
+   without a counter; you'd just lose cross-device aggregation).
+3. **Autostart** — Windows: toggle the `HKCU\…\Run` entry. macOS /
+   Linux: instructions for a Launch Agent / `.desktop` file are
+   printed (no auto-config — too platform-fragmented).
+
+The wizard is re-runnable; existing tokens are kept unless you pass
+`--reauth` (or `-Reauth` on PowerShell).
+
+**After install:**
+
+```bash
+like-spotify            # Windows: tray host with the hotkey (default Ctrl+Shift+Alt+W)
+like-spotify like-once  # any OS: like the currently-playing track and exit
+like-spotify --config   # print config + token paths
+```
+
+**Single-file `.exe`** (for users without Python): build via
+`tools\build.bat` → `dist\LikeSpotify.exe`.
 
 ### 4. Cross-device counters (optional)
 
-Like counters are shared across devices via [Supabase](https://supabase.com) (free tier).
+Pick a backend during `--setup`:
+
+#### Option A — Supabase (default; one SQL block)
+
+Counters live in Supabase Postgres (free tier).
 
 1. Create a Supabase project
 2. Run the setup SQL:
@@ -95,9 +124,17 @@ Like counters are shared across devices via [Supabase](https://supabase.com) (fr
    ALTER TABLE public.track_likes ENABLE ROW LEVEL SECURITY;
    CREATE POLICY "anon_full_access" ON public.track_likes FOR ALL USING (true) WITH CHECK (true);
    ```
-3. Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to `.env` (Android). Desktop wiring lands in [#22](https://github.com/Osasuwu/like_spotify_mobile_app/issues/22) (`SupabaseStorage`).
+3. Android: add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to `.env`. Desktop: paste both into the wizard when prompted for the `supabase` backend.
 
-Without Supabase, counters are stored locally per device.
+#### Option B — Google Sheets
+
+If you'd rather see counts in a spreadsheet you control:
+
+1. Create a Google Sheet with header row `user_id | track_id | count | backfilled | updated_at` on a tab named `Likes`. Optionally add an `ArtistTracks` tab for the follow-artist rule.
+2. Create a Google Cloud OAuth client (type: **Desktop app**) at [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials). Enable the Google Sheets API for the project. Note the Client ID + secret.
+3. Run `like-spotify --setup`, pick `sheets`, paste the spreadsheet ID (from the URL), Client ID, and secret. A browser opens for Google authorization — tokens are refreshed automatically afterwards.
+
+Without a backend, counters are silently skipped — likes still write to your Spotify Liked Songs.
 
 ## Architecture
 
@@ -132,7 +169,9 @@ Android (Flutter + Kotlin)          Desktop (Python framework)
 | Trigger pattern / hotkey | In-app UI | `~/.like_spotify/config.json` → `trigger.hotkey` (default `Ctrl+Shift+Alt+W`) |
 | Spotify client_id | `.env` (`SPOTIFY_CLIENT_ID`) | `like-spotify --setup` → `~/.like_spotify/config.json` |
 | Spotify tokens | `FlutterSecureStorage` | `~/.like_spotify/spotify_token.json` |
-| Archive / best-of / follow | In-app UI | (lands in #22 / #23 / #26) |
+| Storage backend | (Supabase only) | `~/.like_spotify/config.json` → `storage.backend` (`supabase` / `sheets` / `none`) |
+| Google Sheets tokens | n/a | `~/.like_spotify/google_token.json` (refreshed automatically) |
+| Archive / best-of / follow | In-app UI | `~/.like_spotify/config.json` → `actions.{archive_remove,promote_to_best_of,follow_artist}` |
 
 ## License
 

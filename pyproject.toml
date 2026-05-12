@@ -43,7 +43,7 @@ Issues    = "https://github.com/Osasuwu/like_spotify_mobile_app/issues"
 
 [tool.setuptools.packages.find]
 include = ["like_spotify*"]
-exclude = ["tests*"]
+exclude = ["tests*", ".venv-build*"]
 
 [tool.setuptools.package-data]
 "like_spotify.extensions.archive_remove" = ["manifest.json"]
