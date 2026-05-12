@@ -1,4 +1,9 @@
-"""Smoke tests for the pipeline (#21) + Storage wiring (#22).
+"""Smoke tests for the pipeline.
+
+Slices:
+    #21 — tracer-bullet currently_playing → like → feedback.
+    #22 — Storage wiring + count in feedback title.
+    #24 — backfill probe (is_liked → was_already_liked → Storage.increment).
 
 Network / keyboard / tray are not exercised — we mock MusicProvider +
 Storage and verify the core composition flows the way the host depends on.
@@ -19,12 +24,17 @@ class FakeProvider(MusicProvider):
         self,
         track: CurrentTrack | None,
         like_raises: Exception | None = None,
+        is_liked_value: bool = False,
+        is_liked_raises: Exception | None = None,
         user: str = "user-id",
     ):
         self._track = track
         self._like_raises = like_raises
+        self._is_liked_value = is_liked_value
+        self._is_liked_raises = is_liked_raises
         self._user = user
         self.like_calls: list[CurrentTrack] = []
+        self.is_liked_calls: list[CurrentTrack] = []
         self.user_id_calls = 0
 
     async def get_currently_playing(self) -> CurrentTrack | None:
@@ -35,28 +45,48 @@ class FakeProvider(MusicProvider):
             raise self._like_raises
         self.like_calls.append(track)
 
+    async def is_liked(self, track: CurrentTrack) -> bool:
+        self.is_liked_calls.append(track)
+        if self._is_liked_raises is not None:
+            raise self._is_liked_raises
+        return self._is_liked_value
+
     async def user_id(self) -> str:
         self.user_id_calls += 1
         return self._user
 
 
 class FakeStorage(Storage):
-    def __init__(self, counts: dict[tuple[str, str], int] | None = None,
-                 raises: Exception | None = None):
-        self._counts = counts or {}
+    def __init__(self, raises: Exception | None = None):
         self._raises = raises
-        self.increment_calls: list[tuple[str, str]] = []
+        # Records: (user_id, track_id, was_already_liked)
+        self.increment_calls: list[tuple[str, str, bool]] = []
+        self._rows: dict[tuple[str, str], dict] = {}
 
-    async def increment(self, user_id: str, track: CurrentTrack) -> int:
+    async def increment(
+        self,
+        user_id: str,
+        track: CurrentTrack,
+        was_already_liked: bool = False,
+    ) -> int:
         if self._raises is not None:
             raise self._raises
         key = (user_id, track.provider_track_id)
-        self.increment_calls.append(key)
-        self._counts[key] = self._counts.get(key, 0) + 1
-        return self._counts[key]
+        self.increment_calls.append((user_id, track.provider_track_id, was_already_liked))
+        if key not in self._rows:
+            self._rows[key] = {
+                "count": 2 if was_already_liked else 1,
+                "backfilled": was_already_liked,
+            }
+        else:
+            self._rows[key]["count"] += 1
+        return self._rows[key]["count"]
 
     async def get_count(self, user_id: str, track: CurrentTrack) -> int:
-        return self._counts.get((user_id, track.provider_track_id), 0)
+        return self._rows.get((user_id, track.provider_track_id), {}).get("count", 0)
+
+    def row(self, user_id: str, track_id: str) -> dict:
+        return self._rows[(user_id, track_id)]
 
 
 class Feedback:
@@ -126,7 +156,7 @@ async def test_storage_increment_count_surfaces_in_title() -> None:
     await Pipeline(provider=provider, feedback=fb, storage=storage).run_once()
     await Pipeline(provider=provider, feedback=fb, storage=storage).run_once()
 
-    assert storage.increment_calls == [("user-id", "abc123")] * 3
+    assert [c[:2] for c in storage.increment_calls] == [("user-id", "abc123")] * 3
     assert [c[1] for c in fb.calls] == ["Liked × 1", "Liked × 2", "Liked × 3"]
 
 
@@ -141,7 +171,7 @@ async def test_storage_failure_does_not_fail_like() -> None:
     assert provider.like_calls == [_track()]
     success, title, _ = fb.calls[0]
     assert success is True
-    assert title == "Liked"  # no count suffix on soft fail
+    assert title == "Liked"
 
 
 @pytest.mark.asyncio
@@ -153,3 +183,103 @@ async def test_storage_not_called_when_like_fails() -> None:
     await Pipeline(provider=provider, feedback=fb, storage=storage).run_once()
 
     assert storage.increment_calls == []
+
+
+# ── #24: backfill ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_no_is_liked_probe_when_storage_absent() -> None:
+    """Skipping the probe saves a Spotify API call on every press."""
+    provider = FakeProvider(track=_track(), is_liked_value=True)
+    fb = Feedback()
+
+    await Pipeline(provider=provider, feedback=fb).run_once()
+
+    assert provider.is_liked_calls == []
+    assert provider.like_calls == [_track()]
+
+
+@pytest.mark.asyncio
+async def test_first_encounter_already_liked_passes_flag_true() -> None:
+    provider = FakeProvider(track=_track(), is_liked_value=True)
+    storage = FakeStorage()
+    fb = Feedback()
+
+    await Pipeline(provider=provider, feedback=fb, storage=storage).run_once()
+
+    assert provider.is_liked_calls == [_track()]
+    assert storage.increment_calls == [("user-id", "abc123", True)]
+    # FakeStorage mirrors the RPC: was_already_liked=True on INSERT → count=2.
+    assert fb.calls[0][1] == "Liked × 2"
+
+
+@pytest.mark.asyncio
+async def test_subsequent_like_ignores_was_already_liked_flag() -> None:
+    """The flag matters only on INSERT — backfill is idempotent."""
+    track = _track()
+    storage = FakeStorage()
+
+    p1 = FakeProvider(track=track, is_liked_value=True)
+    await Pipeline(provider=p1, feedback=Feedback(), storage=storage).run_once()
+
+    # Second press: even if is_liked says True again, count goes 2 → 3,
+    # backfilled flag in row stays as it was.
+    p2 = FakeProvider(track=track, is_liked_value=True)
+    fb2 = Feedback()
+    await Pipeline(provider=p2, feedback=fb2, storage=storage).run_once()
+
+    row = storage.row("user-id", "abc123")
+    assert row == {"count": 3, "backfilled": True}
+    assert fb2.calls[0][1] == "Liked × 3"
+
+
+@pytest.mark.asyncio
+async def test_first_encounter_not_already_liked_passes_flag_false() -> None:
+    provider = FakeProvider(track=_track(), is_liked_value=False)
+    storage = FakeStorage()
+    fb = Feedback()
+
+    await Pipeline(provider=provider, feedback=fb, storage=storage).run_once()
+
+    assert storage.increment_calls == [("user-id", "abc123", False)]
+    assert storage.row("user-id", "abc123") == {"count": 1, "backfilled": False}
+    assert fb.calls[0][1] == "Liked × 1"
+
+
+@pytest.mark.asyncio
+async def test_is_liked_failure_falls_back_to_false() -> None:
+    """Soft fail on the probe — better to miss a backfill than double-count."""
+    provider = FakeProvider(
+        track=_track(), is_liked_raises=RuntimeError("contains 500")
+    )
+    storage = FakeStorage()
+    fb = Feedback()
+
+    await Pipeline(provider=provider, feedback=fb, storage=storage).run_once()
+
+    assert provider.like_calls == [_track()]
+    assert storage.increment_calls == [("user-id", "abc123", False)]
+    assert fb.calls[0][0] is True
+
+
+@pytest.mark.asyncio
+async def test_is_liked_probed_before_like() -> None:
+    """Probe before write — liking first would always return True."""
+    call_order: list[str] = []
+
+    class OrderedProvider(FakeProvider):
+        async def is_liked(self, track: CurrentTrack) -> bool:
+            call_order.append("is_liked")
+            return await super().is_liked(track)
+
+        async def like(self, track: CurrentTrack) -> None:
+            call_order.append("like")
+            await super().like(track)
+
+    provider = OrderedProvider(track=_track(), is_liked_value=False)
+    await Pipeline(
+        provider=provider, feedback=Feedback(), storage=FakeStorage()
+    ).run_once()
+
+    assert call_order == ["is_liked", "like"]

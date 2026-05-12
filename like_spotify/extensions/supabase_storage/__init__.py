@@ -4,9 +4,14 @@ Wraps the `increment_track_like` RPC (returns the new total) and a
 SELECT on `track_likes` for `get_count`. Sync `requests` wrapped in
 `asyncio.to_thread`, mirroring the SpotifyMusicProvider style.
 
-Schema (existing, no migration this slice):
-    table track_likes(user_id text, track_id text, count int, PRIMARY KEY(user_id, track_id))
-    function increment_track_like(p_user_id text, p_track_id text) returns int
+Canonical schema lives in `docs/supabase-setup.sql`. Summary:
+    table  track_likes(
+        user_id text, track_id text, count int, backfilled bool,
+        primary key(user_id, track_id))
+    func   increment_track_like(
+        p_user_id text, p_track_id text, p_was_already_liked bool default false)
+        returns int   -- inserts (count=2, backfilled=true) if flag is true on
+                      -- first encounter; plain +1 on every subsequent press.
 """
 
 from __future__ import annotations
@@ -30,8 +35,18 @@ class SupabaseStorage(Storage):
         self._key = anon_key
         self._timeout = timeout
 
-    async def increment(self, user_id: str, track: CurrentTrack) -> int:
-        return await asyncio.to_thread(self._increment_sync, user_id, track.provider_track_id)
+    async def increment(
+        self,
+        user_id: str,
+        track: CurrentTrack,
+        was_already_liked: bool = False,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._increment_sync,
+            user_id,
+            track.provider_track_id,
+            was_already_liked,
+        )
 
     async def get_count(self, user_id: str, track: CurrentTrack) -> int:
         return await asyncio.to_thread(self._get_count_sync, user_id, track.provider_track_id)
@@ -45,11 +60,20 @@ class SupabaseStorage(Storage):
             "Authorization": f"Bearer {self._key}",
         }
 
-    def _increment_sync(self, user_id: str, track_id: str) -> int:
+    def _increment_sync(
+        self,
+        user_id: str,
+        track_id: str,
+        was_already_liked: bool,
+    ) -> int:
         r = requests.post(
             f"{self._url}/rest/v1/rpc/increment_track_like",
             headers=self._headers(),
-            json={"p_user_id": user_id, "p_track_id": track_id},
+            json={
+                "p_user_id": user_id,
+                "p_track_id": track_id,
+                "p_was_already_liked": was_already_liked,
+            },
             timeout=self._timeout,
         )
         if r.status_code >= 500:
