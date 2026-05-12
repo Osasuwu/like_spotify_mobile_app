@@ -44,23 +44,35 @@ class FakeResponse:
 
 
 class SupabaseSim:
-    """In-memory mirror of the increment_track_like RPC + track_likes table."""
+    """In-memory mirror of the Supabase RPCs + tables."""
 
     def __init__(self) -> None:
         self.rows: dict[tuple[str, str], dict] = {}
+        self.artist_rows: set[tuple[str, str, str]] = set()
 
     def handle_post(self, url: str, **kw) -> FakeResponse:
         body = kw.get("json", {})
-        key = (body["p_user_id"], body["p_track_id"])
-        flag = bool(body.get("p_was_already_liked", False))
-        if key not in self.rows:
-            self.rows[key] = {
-                "count": 2 if flag else 1,
-                "backfilled": flag,
-            }
-        else:
-            self.rows[key]["count"] += 1
-        return FakeResponse(status_code=200, text=str(self.rows[key]["count"]))
+        if url.endswith("/rpc/increment_track_like"):
+            key = (body["p_user_id"], body["p_track_id"])
+            flag = bool(body.get("p_was_already_liked", False))
+            if key not in self.rows:
+                self.rows[key] = {
+                    "count": 2 if flag else 1,
+                    "backfilled": flag,
+                }
+            else:
+                self.rows[key]["count"] += 1
+            return FakeResponse(status_code=200, text=str(self.rows[key]["count"]))
+        if url.endswith("/rpc/record_artist_track"):
+            triple = (body["p_user_id"], body["p_artist_id"], body["p_track_id"])
+            self.artist_rows.add(triple)
+            count = sum(
+                1
+                for u, a, _t in self.artist_rows
+                if u == triple[0] and a == triple[1]
+            )
+            return FakeResponse(status_code=200, text=str(count))
+        return FakeResponse(status_code=404, text="unknown rpc")
 
     def handle_get(self, url: str, **kw) -> FakeResponse:
         params = kw.get("params") or {}
@@ -74,34 +86,53 @@ class SupabaseSim:
 
 
 class SheetsSim:
-    def __init__(self, sheet: str = "Likes") -> None:
-        self.rows: list[list] = [["user_id", "track_id", "count", "backfilled", "updated_at"]]
+    def __init__(
+        self, sheet: str = "Likes", artist_sheet: str = "ArtistTracks"
+    ) -> None:
+        self.sheets: dict[str, list[list]] = {
+            sheet: [["user_id", "track_id", "count", "backfilled", "updated_at"]],
+            artist_sheet: [["user_id", "artist_id", "track_id", "created_at"]],
+        }
         self.sheet = sheet
+        self.artist_sheet = artist_sheet
+
+    def _sheet_for(self, url: str) -> str:
+        """Extract sheet name from `.../values/<sheet>` or `.../values/<sheet>:append`."""
+        tail = url.rsplit("/values/", 1)[-1]
+        sheet = tail.split(":")[0].split("!")[0]
+        return sheet
 
     def handle_get(self, url: str, **kw) -> FakeResponse:
-        return FakeResponse(status_code=200, json_body={"values": list(self.rows)})
+        sheet = self._sheet_for(url)
+        rows = self.sheets.get(sheet)
+        if rows is None:
+            return FakeResponse(status_code=400, text=f"unknown sheet {sheet}")
+        return FakeResponse(status_code=200, json_body={"values": list(rows)})
 
     def handle_post(self, url: str, **kw) -> FakeResponse:
         body = kw.get("json", {})
+        sheet = self._sheet_for(url)
+        rows = self.sheets.setdefault(sheet, [])
         for row in body.get("values", []):
-            self.rows.append(list(row))
-        row_index = len(self.rows)
+            rows.append(list(row))
+        row_index = len(rows)
         return FakeResponse(
             status_code=200,
-            json_body={"updates": {"updatedRange": f"{self.sheet}!A{row_index}:E{row_index}"}},
+            json_body={"updates": {"updatedRange": f"{sheet}!A{row_index}:E{row_index}"}},
         )
 
     def handle_put(self, url: str, **kw) -> FakeResponse:
         tail = url.rsplit("/values/", 1)[-1]
-        _sheet, _, a1 = tail.partition("!")
+        sheet, _, a1 = tail.partition("!")
+        rows = self.sheets[sheet]
         col_letter = a1.split(":")[0].rstrip("0123456789")
         row_digits = a1.split(":")[0][len(col_letter):]
         row_idx = int(row_digits)
         col = ord(col_letter.upper()) - ord("A")
         new_value = kw["json"]["values"][0][0]
-        while len(self.rows[row_idx - 1]) <= col:
-            self.rows[row_idx - 1].append("")
-        self.rows[row_idx - 1][col] = new_value
+        while len(rows[row_idx - 1]) <= col:
+            rows[row_idx - 1].append("")
+        rows[row_idx - 1][col] = new_value
         return FakeResponse(status_code=200, json_body={})
 
 
@@ -202,6 +233,31 @@ async def test_get_count_reflects_running_total(storage: Storage) -> None:
     await storage.increment("user-1", _track("trk-a"))
     await storage.increment("user-1", _track("trk-a"))
     assert await storage.get_count("user-1", _track("trk-a")) == 2
+
+
+@pytest.mark.asyncio
+async def test_record_artist_track_returns_distinct_count(storage: Storage) -> None:
+    a = await storage.record_artist_track("u1", "art1", "trk-a")
+    b = await storage.record_artist_track("u1", "art1", "trk-b")
+    c = await storage.record_artist_track("u1", "art1", "trk-c")
+    assert (a, b, c) == (1, 2, 3)
+
+
+@pytest.mark.asyncio
+async def test_record_artist_track_is_idempotent(storage: Storage) -> None:
+    """Re-recording the same triple does NOT increment."""
+    first = await storage.record_artist_track("u1", "art1", "trk-a")
+    second = await storage.record_artist_track("u1", "art1", "trk-a")
+    third = await storage.record_artist_track("u1", "art1", "trk-a")
+    assert (first, second, third) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_record_artist_track_separates_artists(storage: Storage) -> None:
+    await storage.record_artist_track("u1", "art1", "trk-a")
+    await storage.record_artist_track("u1", "art1", "trk-b")
+    other = await storage.record_artist_track("u1", "art2", "trk-a")
+    assert other == 1  # different artist starts at 1
 
 
 @pytest.mark.asyncio

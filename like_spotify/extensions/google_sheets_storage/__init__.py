@@ -36,7 +36,9 @@ DOMAIN = "google_sheets"
 
 API_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
 DEFAULT_SHEET = "Likes"
+DEFAULT_ARTIST_SHEET = "ArtistTracks"
 HEADER_ROW = ["user_id", "track_id", "count", "backfilled", "updated_at"]
+ARTIST_HEADER_ROW = ["user_id", "artist_id", "track_id", "created_at"]
 
 
 TokenProvider = Callable[[], str]
@@ -48,6 +50,7 @@ class GoogleSheetsStorage(Storage):
         spreadsheet_id: str,
         token_provider: TokenProvider,
         sheet_name: str = DEFAULT_SHEET,
+        artist_sheet_name: str = DEFAULT_ARTIST_SHEET,
         timeout: float = 5.0,
     ) -> None:
         if not spreadsheet_id:
@@ -57,11 +60,14 @@ class GoogleSheetsStorage(Storage):
         self._sid = spreadsheet_id
         self._token = token_provider
         self._sheet = sheet_name
+        self._artist_sheet = artist_sheet_name
         self._timeout = timeout
         # Filled on first access. Row index is 1-based and INCLUDES the
         # header row, so the first data row is index 2.
         self._row_index: dict[tuple[str, str], int] | None = None
         self._count_cache: dict[tuple[str, str], int] = {}
+        # #26 — distinct (user, artist, track) triples seen.
+        self._artist_seen: set[tuple[str, str, str]] | None = None
 
     async def increment(
         self,
@@ -76,6 +82,13 @@ class GoogleSheetsStorage(Storage):
     async def get_count(self, user_id: str, track: CurrentTrack) -> int:
         return await asyncio.to_thread(
             self._get_count_sync, user_id, track.provider_track_id
+        )
+
+    async def record_artist_track(
+        self, user_id: str, artist_id: str, track_id: str
+    ) -> int:
+        return await asyncio.to_thread(
+            self._record_artist_track_sync, user_id, artist_id, track_id
         )
 
     # ── Internals ────────────────────────────────────────────────────────
@@ -149,6 +162,48 @@ class GoogleSheetsStorage(Storage):
         self._ensure_loaded()
         return self._count_cache.get((user_id, track_id), 0)
 
+    def _ensure_artist_loaded(self) -> None:
+        if self._artist_seen is not None:
+            return
+        r = requests.get(
+            f"{API_BASE}/{self._sid}/values/{self._artist_sheet}",
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        if r.status_code == 400:
+            # Sheet tab doesn't exist yet — start empty; the append below
+            # will fail until the user creates the tab. Keep behaviour
+            # consistent with first-run on the Likes sheet.
+            self._artist_seen = set()
+            return
+        if r.status_code >= 500:
+            raise TransientError(f"sheets get 5xx: {r.status_code}")
+        if r.status_code >= 400:
+            raise RuntimeError(f"sheets get {r.status_code}: {r.text}")
+        rows = r.json().get("values", []) or []
+        seen: set[tuple[str, str, str]] = set()
+        for row in rows[1:]:
+            if len(row) >= 3:
+                seen.add((row[0], row[1], row[2]))
+        self._artist_seen = seen
+
+    def _record_artist_track_sync(
+        self, user_id: str, artist_id: str, track_id: str
+    ) -> int:
+        self._ensure_artist_loaded()
+        assert self._artist_seen is not None
+        triple = (user_id, artist_id, track_id)
+        if triple not in self._artist_seen:
+            self._values_append_to(
+                self._artist_sheet,
+                [user_id, artist_id, track_id, _now_iso()],
+            )
+            self._artist_seen.add(triple)
+        # Count distinct tracks for this (user, artist).
+        return sum(
+            1 for (u, a, _t) in self._artist_seen if u == user_id and a == artist_id
+        )
+
     def _values_update(self, range_a1: str, values: list[list]) -> None:
         r = requests.put(
             f"{API_BASE}/{self._sid}/values/{range_a1}",
@@ -163,9 +218,15 @@ class GoogleSheetsStorage(Storage):
             raise RuntimeError(f"sheets update {r.status_code}: {r.text}")
 
     def _values_append(self, row: list) -> int:
-        """Append one row; return the 1-based row index it landed on."""
+        """Append one row to the primary Likes sheet; return the 1-based
+        row index it landed on."""
+        body = self._values_append_to(self._sheet, row)
+        updated_range = (body.get("updates") or {}).get("updatedRange", "")
+        return _row_from_a1_range(updated_range)
+
+    def _values_append_to(self, sheet: str, row: list) -> dict:
         r = requests.post(
-            f"{API_BASE}/{self._sid}/values/{self._sheet}:append",
+            f"{API_BASE}/{self._sid}/values/{sheet}:append",
             headers=self._headers(),
             params={
                 "valueInputOption": "RAW",
@@ -178,10 +239,7 @@ class GoogleSheetsStorage(Storage):
             raise TransientError(f"sheets append 5xx: {r.status_code}")
         if r.status_code >= 400:
             raise RuntimeError(f"sheets append {r.status_code}: {r.text}")
-        body = r.json()
-        # The "updates.updatedRange" comes back as 'Likes!A7:E7' — parse the row.
-        updated_range = (body.get("updates") or {}).get("updatedRange", "")
-        return _row_from_a1_range(updated_range)
+        return r.json()
 
 
 # ── Module-level helpers ─────────────────────────────────────────────────

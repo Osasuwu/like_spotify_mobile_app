@@ -51,6 +51,13 @@ class SupabaseStorage(Storage):
     async def get_count(self, user_id: str, track: CurrentTrack) -> int:
         return await asyncio.to_thread(self._get_count_sync, user_id, track.provider_track_id)
 
+    async def record_artist_track(
+        self, user_id: str, artist_id: str, track_id: str
+    ) -> int:
+        return await asyncio.to_thread(
+            self._record_artist_track_sync, user_id, artist_id, track_id
+        )
+
     # ── Internals ────────────────────────────────────────────────────────
 
     def _headers(self) -> dict[str, str]:
@@ -73,6 +80,25 @@ class SupabaseStorage(Storage):
                 "p_user_id": user_id,
                 "p_track_id": track_id,
                 "p_was_already_liked": was_already_liked,
+            },
+            timeout=self._timeout,
+        )
+        if r.status_code >= 500:
+            raise TransientError(f"supabase rpc 5xx: {r.status_code}")
+        if r.status_code >= 400:
+            raise RuntimeError(f"supabase rpc {r.status_code}: {r.text}")
+        return _parse_count(r.text)
+
+    def _record_artist_track_sync(
+        self, user_id: str, artist_id: str, track_id: str
+    ) -> int:
+        r = requests.post(
+            f"{self._url}/rest/v1/rpc/record_artist_track",
+            headers=self._headers(),
+            json={
+                "p_user_id": user_id,
+                "p_artist_id": artist_id,
+                "p_track_id": track_id,
             },
             timeout=self._timeout,
         )
