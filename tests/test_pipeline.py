@@ -59,7 +59,7 @@ class FakeProvider(MusicProvider):
 class FakeStorage(Storage):
     def __init__(self, raises: Exception | None = None):
         self._raises = raises
-        # Records: (user_id, track_id, was_already_liked, count_after)
+        # Records: (user_id, track_id, was_already_liked)
         self.increment_calls: list[tuple[str, str, bool]] = []
         self._rows: dict[tuple[str, str], dict] = {}
 
@@ -265,7 +265,7 @@ async def test_is_liked_failure_falls_back_to_false() -> None:
 
 @pytest.mark.asyncio
 async def test_is_liked_probed_before_like() -> None:
-    """Probe before write — likeing first would always return True."""
+    """Probe before write — liking first would always return True."""
     call_order: list[str] = []
 
     class OrderedProvider(FakeProvider):

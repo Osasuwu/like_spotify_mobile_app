@@ -27,10 +27,12 @@ class Storage(ABC):
         """Atomically bump the like counter for (user, track). Returns new count.
 
         `was_already_liked` is the provider's "this was already in your liked
-        collection before we ever saw it" signal (#24 backfill). On the very
-        first encounter, an impl SHOULD treat that as count=2 instead of 1;
-        on subsequent encounters the flag MUST be ignored. The flag is set
-        at most once per (user, track) — backfill is idempotent.
+        collection before we ever saw it" signal (#24 backfill). Callers MAY
+        pass `True` on every press (the pipeline re-probes each time);
+        impls MUST only honour it on the very first INSERT — treat that
+        first encounter as count=2 instead of 1 — and ignore the flag on
+        every subsequent UPDATE. Backfill is therefore idempotent regardless
+        of how many times True is passed afterwards.
         """
 
     @abstractmethod

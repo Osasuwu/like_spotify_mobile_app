@@ -4,9 +4,14 @@ Wraps the `increment_track_like` RPC (returns the new total) and a
 SELECT on `track_likes` for `get_count`. Sync `requests` wrapped in
 `asyncio.to_thread`, mirroring the SpotifyMusicProvider style.
 
-Schema (existing, no migration this slice):
-    table track_likes(user_id text, track_id text, count int, PRIMARY KEY(user_id, track_id))
-    function increment_track_like(p_user_id text, p_track_id text) returns int
+Canonical schema lives in `docs/supabase-setup.sql`. Summary:
+    table  track_likes(
+        user_id text, track_id text, count int, backfilled bool,
+        primary key(user_id, track_id))
+    func   increment_track_like(
+        p_user_id text, p_track_id text, p_was_already_liked bool default false)
+        returns int   -- inserts (count=2, backfilled=true) if flag is true on
+                      -- first encounter; plain +1 on every subsequent press.
 """
 
 from __future__ import annotations
