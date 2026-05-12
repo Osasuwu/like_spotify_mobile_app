@@ -22,7 +22,9 @@ import time
 from pathlib import Path
 
 from like_spotify.core.pipeline import Pipeline
+from like_spotify.core.storage import Storage
 from like_spotify.extensions.spotify import MUSIC_PROVIDER as make_spotify_provider
+from like_spotify.extensions.supabase_storage import STORAGE as make_supabase_storage
 from like_spotify.extensions.tray_hotkey_trigger import (
     DEFAULT_HOTKEY,
     TRIGGER as make_tray_hotkey_trigger,
@@ -132,6 +134,26 @@ class TrayFeedback:
     @property
     def default_icon(self):
         return self._icon_default
+
+
+# ── Storage (optional, soft-fail) ───────────────────────────────────
+
+
+def _build_storage(cfg: dict) -> Storage | None:
+    """Return a Storage impl iff Supabase is configured; else None.
+
+    Acceptance criterion: like still succeeds when storage is unconfigured.
+    Pipeline treats `None` as 'counter silently unavailable'.
+    """
+    supabase = cfg.get("supabase", {}) if isinstance(cfg.get("supabase"), dict) else {}
+    url = supabase.get("url") or os.environ.get("SUPABASE_URL", "")
+    key = supabase.get("anon_key") or os.environ.get("SUPABASE_ANON_KEY", "")
+    if not url or not key:
+        return None
+    try:
+        return make_supabase_storage(url=url, anon_key=key)
+    except Exception:
+        return None
 
 
 # ── Autostart (Windows) ─────────────────────────────────────────────
@@ -262,7 +284,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     feedback = TrayFeedback(hotkey=hotkey)
-    pipeline = Pipeline(provider=provider, feedback=feedback)
+    storage = _build_storage(cfg)
+    pipeline = Pipeline(provider=provider, feedback=feedback, storage=storage)
     trigger = make_tray_hotkey_trigger(hotkey=hotkey)
 
     loop = asyncio.new_event_loop()
