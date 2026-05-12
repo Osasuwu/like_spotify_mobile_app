@@ -47,6 +47,7 @@ exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 "like_spotify.extensions.spotify" = ["manifest.json"]
+"like_spotify.extensions.supabase_storage" = ["manifest.json"]
 "like_spotify.extensions.tray_hotkey_trigger" = ["manifest.json"]
 
 [tool.pytest.ini_options]
