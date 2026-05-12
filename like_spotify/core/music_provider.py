@@ -17,6 +17,14 @@ class MusicProvider(ABC):
     async def like(self, track: CurrentTrack) -> None: ...
 
     @abstractmethod
+    async def is_liked(self, track: CurrentTrack) -> bool:
+        """True iff the user already had this track in their liked collection.
+
+        Read before `like()` to power the #24 backfill: first encounter of
+        a pre-existing like counts as 2. Cheap O(1) lookup is expected.
+        """
+
+    @abstractmethod
     async def user_id(self) -> str:
         """Stable per-user id. Storage keys against it.
 

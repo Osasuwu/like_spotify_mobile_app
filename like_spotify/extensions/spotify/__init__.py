@@ -55,6 +55,9 @@ class SpotifyMusicProvider(MusicProvider):
     async def like(self, track: CurrentTrack) -> None:
         await asyncio.to_thread(self._like_sync, track.provider_track_id)
 
+    async def is_liked(self, track: CurrentTrack) -> bool:
+        return await asyncio.to_thread(self._is_liked_sync, track.provider_track_id)
+
     async def user_id(self) -> str:
         if self._user_id_cache:
             return self._user_id_cache
@@ -198,6 +201,18 @@ class SpotifyMusicProvider(MusicProvider):
             timeout=5,
         )
         _raise_for_status(r)
+
+    def _is_liked_sync(self, track_id: str) -> bool:
+        token = self._access_token()
+        r = requests.get(
+            f"{API_BASE}/me/tracks/contains",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"ids": track_id},
+            timeout=5,
+        )
+        _raise_for_status(r)
+        body = r.json()
+        return bool(body) and bool(body[0])
 
     def _fetch_user_id_sync(self) -> str:
         token = self._access_token()

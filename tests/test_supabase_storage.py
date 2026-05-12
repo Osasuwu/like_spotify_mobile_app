@@ -58,10 +58,33 @@ async def test_increment_posts_to_rpc_and_returns_count(monkeypatch) -> None:
 
     assert count == 7
     assert captured["url"] == "https://x.supabase.co/rest/v1/rpc/increment_track_like"
-    assert captured["json"] == {"p_user_id": "user-1", "p_track_id": "trk-42"}
+    assert captured["json"] == {
+        "p_user_id": "user-1",
+        "p_track_id": "trk-42",
+        "p_was_already_liked": False,
+    }
     h = captured["headers"]
     assert h["apikey"] == "anonkey"
     assert h["Authorization"] == "Bearer anonkey"
+
+
+@pytest.mark.asyncio
+async def test_increment_passes_was_already_liked_flag(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["json"] = json
+        return FakeResponse(status_code=200, text="2")
+
+    monkeypatch.setattr(
+        "like_spotify.extensions.supabase_storage.requests.post", fake_post
+    )
+
+    storage = SupabaseStorage(url="https://x.supabase.co", anon_key="k")
+    count = await storage.increment("user-1", _track(), was_already_liked=True)
+
+    assert count == 2
+    assert captured["json"]["p_was_already_liked"] is True
 
 
 @pytest.mark.asyncio
