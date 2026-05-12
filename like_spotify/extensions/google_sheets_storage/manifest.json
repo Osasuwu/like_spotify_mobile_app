@@ -1,0 +1,10 @@
+{
+  "domain": "google_sheets",
+  "extension_point": "storage",
+  "name": "Google Sheets",
+  "description": "Like counter persisted to a Google Sheet. Second Storage impl validating the abstraction.",
+  "codeowners": ["@Osasuwu"],
+  "requirements": ["requests>=2.31"],
+  "documentation": "https://github.com/Osasuwu/like_spotify_mobile_app/blob/main/like_spotify/extensions/google_sheets_storage/README.md",
+  "stage": "alpha"
+}

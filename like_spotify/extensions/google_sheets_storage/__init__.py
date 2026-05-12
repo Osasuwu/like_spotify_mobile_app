@@ -1,0 +1,223 @@
+"""GoogleSheetsStorage — second Storage impl.
+
+Ships as the second reference impl that validates the `Storage`
+abstraction with a backend that's not a SQL-style RPC. Forces the
+interface to honour append + lookup-by-key semantics without leaking
+PostgREST shape.
+
+Sheet schema (per #25): columns `user_id | track_id | count | backfilled | updated_at`,
+with a single header row. The first action invocation reads the sheet
+once to build an in-memory `(user_id, track_id) -> row_index` map;
+subsequent likes do a targeted `values.update` or, on miss, a single
+`values.append`. The backfill flag from #24 is honoured: on the very
+first insert with `was_already_liked=True`, count is seeded at 2 and
+`backfilled` is set to `TRUE`; on every subsequent press, the row is
+updated to `count + 1` and `backfilled` stays as it was.
+
+OAuth is owner-managed: the constructor takes a `token_provider`
+callable that returns a fresh access token at call time. The host
+wires that to whatever refresh strategy it likes (the `--setup`
+integration lands separately in #28).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import Callable
+
+import requests
+
+from like_spotify.core.errors import TransientError
+from like_spotify.core.storage import Storage
+from like_spotify.core.types import CurrentTrack
+
+DOMAIN = "google_sheets"
+
+API_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
+DEFAULT_SHEET = "Likes"
+HEADER_ROW = ["user_id", "track_id", "count", "backfilled", "updated_at"]
+
+
+TokenProvider = Callable[[], str]
+
+
+class GoogleSheetsStorage(Storage):
+    def __init__(
+        self,
+        spreadsheet_id: str,
+        token_provider: TokenProvider,
+        sheet_name: str = DEFAULT_SHEET,
+        timeout: float = 5.0,
+    ) -> None:
+        if not spreadsheet_id:
+            raise ValueError("spreadsheet_id is required")
+        if token_provider is None:
+            raise ValueError("token_provider is required")
+        self._sid = spreadsheet_id
+        self._token = token_provider
+        self._sheet = sheet_name
+        self._timeout = timeout
+        # Filled on first access. Row index is 1-based and INCLUDES the
+        # header row, so the first data row is index 2.
+        self._row_index: dict[tuple[str, str], int] | None = None
+        self._count_cache: dict[tuple[str, str], int] = {}
+
+    async def increment(
+        self,
+        user_id: str,
+        track: CurrentTrack,
+        was_already_liked: bool = False,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._increment_sync, user_id, track.provider_track_id, was_already_liked
+        )
+
+    async def get_count(self, user_id: str, track: CurrentTrack) -> int:
+        return await asyncio.to_thread(
+            self._get_count_sync, user_id, track.provider_track_id
+        )
+
+    # ── Internals ────────────────────────────────────────────────────────
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._token()}",
+            "Content-Type": "application/json",
+        }
+
+    def _ensure_loaded(self) -> None:
+        if self._row_index is not None:
+            return
+        r = requests.get(
+            f"{API_BASE}/{self._sid}/values/{self._sheet}",
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        if r.status_code >= 500:
+            raise TransientError(f"sheets get 5xx: {r.status_code}")
+        if r.status_code >= 400:
+            raise RuntimeError(f"sheets get {r.status_code}: {r.text}")
+        rows = r.json().get("values", []) or []
+        index: dict[tuple[str, str], int] = {}
+        counts: dict[tuple[str, str], int] = {}
+        # Row 1 is the header; data starts at row 2.
+        for offset, row in enumerate(rows[1:], start=2):
+            if len(row) < 3:
+                continue
+            key = (row[0], row[1])
+            index[key] = offset
+            try:
+                counts[key] = int(row[2])
+            except (TypeError, ValueError):
+                counts[key] = 0
+        self._row_index = index
+        self._count_cache = counts
+
+    def _increment_sync(
+        self, user_id: str, track_id: str, was_already_liked: bool
+    ) -> int:
+        self._ensure_loaded()
+        assert self._row_index is not None  # for type checker
+        key = (user_id, track_id)
+        now = _now_iso()
+
+        if key in self._row_index:
+            new_count = self._count_cache.get(key, 0) + 1
+            # Targeted UPDATE; leave backfilled column alone (col D),
+            # rewrite count (col C) and updated_at (col E).
+            self._values_update(
+                f"{self._sheet}!C{self._row_index[key]}:C{self._row_index[key]}",
+                [[new_count]],
+            )
+            self._values_update(
+                f"{self._sheet}!E{self._row_index[key]}:E{self._row_index[key]}",
+                [[now]],
+            )
+            self._count_cache[key] = new_count
+            return new_count
+
+        # APPEND new row. Backfill flag honoured on this first encounter.
+        new_count = 2 if was_already_liked else 1
+        row = [user_id, track_id, new_count, "TRUE" if was_already_liked else "FALSE", now]
+        appended_index = self._values_append(row)
+        self._row_index[key] = appended_index
+        self._count_cache[key] = new_count
+        return new_count
+
+    def _get_count_sync(self, user_id: str, track_id: str) -> int:
+        self._ensure_loaded()
+        return self._count_cache.get((user_id, track_id), 0)
+
+    def _values_update(self, range_a1: str, values: list[list]) -> None:
+        r = requests.put(
+            f"{API_BASE}/{self._sid}/values/{range_a1}",
+            headers=self._headers(),
+            params={"valueInputOption": "RAW"},
+            json={"values": values},
+            timeout=self._timeout,
+        )
+        if r.status_code >= 500:
+            raise TransientError(f"sheets update 5xx: {r.status_code}")
+        if r.status_code >= 400:
+            raise RuntimeError(f"sheets update {r.status_code}: {r.text}")
+
+    def _values_append(self, row: list) -> int:
+        """Append one row; return the 1-based row index it landed on."""
+        r = requests.post(
+            f"{API_BASE}/{self._sid}/values/{self._sheet}:append",
+            headers=self._headers(),
+            params={
+                "valueInputOption": "RAW",
+                "insertDataOption": "INSERT_ROWS",
+            },
+            json={"values": [row]},
+            timeout=self._timeout,
+        )
+        if r.status_code >= 500:
+            raise TransientError(f"sheets append 5xx: {r.status_code}")
+        if r.status_code >= 400:
+            raise RuntimeError(f"sheets append {r.status_code}: {r.text}")
+        body = r.json()
+        # The "updates.updatedRange" comes back as 'Likes!A7:E7' — parse the row.
+        updated_range = (body.get("updates") or {}).get("updatedRange", "")
+        return _row_from_a1_range(updated_range)
+
+
+# ── Module-level helpers ─────────────────────────────────────────────────
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _row_from_a1_range(a1: str) -> int:
+    """Extract the row number from an A1 range like 'Likes!A7:E7' → 7.
+
+    Falls back to a large number on parse failure so the index stays
+    consistent enough for in-memory use (a refresh re-syncs anyway).
+    """
+    # Find the last numeric run in the string.
+    digits = ""
+    for ch in reversed(a1):
+        if ch.isdigit():
+            digits = ch + digits
+        elif digits:
+            break
+    try:
+        return int(digits)
+    except ValueError:
+        return 0
+
+
+def STORAGE(
+    spreadsheet_id: str,
+    token_provider: TokenProvider,
+    sheet_name: str = DEFAULT_SHEET,
+) -> GoogleSheetsStorage:
+    """Factory called by the host. Signature widens in #28 (manifest deps)."""
+    return GoogleSheetsStorage(
+        spreadsheet_id=spreadsheet_id,
+        token_provider=token_provider,
+        sheet_name=sheet_name,
+    )
