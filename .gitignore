@@ -12,6 +12,9 @@
 .swiftpm/
 migrate_working_dir/
 
+# Claude Code runtime artifacts (scheduled-tasks lock, etc.)
+.claude/scheduled_tasks.lock
+
 # IntelliJ related
 *.iml
 *.ipr
