@@ -7,7 +7,7 @@ files prefer a concrete file path. This launcher exists only to give the
 
 import sys
 
-from like_spotify.hosts.tray import main
+from like_spotify.hosts import main
 
 if __name__ == "__main__":
     sys.exit(main())
