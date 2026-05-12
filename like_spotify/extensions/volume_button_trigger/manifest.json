@@ -1,0 +1,10 @@
+{
+  "domain": "volume_button_trigger",
+  "extension_point": "trigger",
+  "name": "Volume Buttons (HID double-tap)",
+  "description": "Skeleton: vol-up-up on a connected HID device emits a like intent. HID read loop is a TODO — see CONTRIBUTING.md.",
+  "codeowners": ["@Osasuwu"],
+  "requirements": [],
+  "documentation": "https://github.com/Osasuwu/like_spotify_mobile_app/blob/main/CONTRIBUTING.md",
+  "stage": "experimental"
+}

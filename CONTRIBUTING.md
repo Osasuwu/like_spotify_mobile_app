@@ -87,20 +87,275 @@ Same shape as macOS:
 - **`PostLikeAction` impls** — anything that wants to react to a like.
   Mood tagging, last.fm scrobble fix-up, "send to a friend's queue", etc.
 
-## Adding an extension
+## Plugin-author guide
 
-1. Create `like_spotify/extensions/<your_thing>/__init__.py` with the
-   concrete class and a top-level factory named after the extension
-   point — `TRIGGER`, `MUSIC_PROVIDER`, `STORAGE`,
-   `PRE_LIKE_ACTION`, or `POST_LIKE_ACTION`.
-2. Create `manifest.json` next to it (see existing extensions for the
-   schema — `domain`, `extension_point`, `name`, `description`,
-   `requirements`, `stage`).
-3. Register the manifest file in `pyproject.toml`'s
-   `[tool.setuptools.package-data]` block.
-4. Add tests under `tests/`. For `Storage`, run the shared contract
-   suite from `tests/test_storage_contract.py`. For everything else,
-   small async unit tests against the interface are enough.
+The desktop framework has five extension points. Each one is a small
+ABC under `like_spotify/core/`; concrete impls live in
+`like_spotify/extensions/<your_domain>/`. The host discovers extensions
+via a filesystem convention (manifest + module-level factory) —
+modelled on Music Assistant's provider layout, with a typed-base per
+seam instead of a single generic `Plugin` (see
+[docs/design/interfaces.md](docs/design/interfaces.md) §1 for the
+prior-art comparison and why we chose this shape over Pano's closed
+enum or MA's single-bag plugin).
+
+### Anatomy of an extension
+
+Every extension folder has the same shape:
+
+```
+like_spotify/extensions/<your_domain>/
+├── __init__.py     # the class + a module-level factory
+└── manifest.json   # static metadata for the host
+```
+
+The factory name is fixed per extension point — `TRIGGER`,
+`MUSIC_PROVIDER`, `STORAGE`, `PRE_LIKE_ACTION`, or `POST_LIKE_ACTION`
+— and it's a plain callable that returns one configured instance.
+The host imports the package and calls the factory with whatever
+kwargs the manifest declares.
+
+Example manifest:
+
+```json
+{
+  "domain": "volume_button_trigger",
+  "extension_point": "trigger",
+  "name": "Volume Buttons",
+  "description": "Listen for vol-up-up on a connected MIDI / HID device and emit a like intent.",
+  "codeowners": ["@you"],
+  "requirements": ["hid>=1.0"],
+  "documentation": "https://github.com/Osasuwu/like_spotify_mobile_app/blob/main/like_spotify/extensions/volume_button_trigger/README.md",
+  "stage": "experimental"
+}
+```
+
+`stage` is one of `experimental | stable | deprecated`. `requirements`
+is pip-compatible — the install bootstrap (see `install.ps1` / `install.sh`)
+resolves them at first enable.
+
+### 1. `Trigger` — emit a like intent
+
+```python
+# like_spotify/core/trigger.py (already shipped)
+class Trigger(ABC):
+    @abstractmethod
+    async def start(self, emit: EmitFn) -> None: ...
+    @abstractmethod
+    async def stop(self) -> None: ...
+```
+
+`start(emit)` is called once. Long-lived triggers register a listener
+(global hotkey, system-tray menu item, MQTT subscription, MIDI HID
+read loop) and call `emit()` each time the user signals "like the
+playing track". One-shot triggers (`OneShotCliTrigger`) `await emit()`
+inside `start` and return. `stop()` must be idempotent.
+
+Existing impls:
+
+- `tray_hotkey_trigger` — global keyboard hotkey (Windows).
+- `one_shot_cli_trigger` — per-invocation, any OS.
+
+**Skeleton for a third trigger (good-first-PR — `VolumeButtonTrigger`):**
+
+```python
+# like_spotify/extensions/volume_button_trigger/__init__.py
+"""VolumeButtonTrigger — emit a like intent on a vol-up-up double-tap.
+
+Watches an HID device for media-volume-up events. Two presses inside
+DOUBLE_TAP_WINDOW_MS count as a like signal — single presses still
+adjust system volume normally because we don't suppress them.
+
+Status: skeleton only — the HID device discovery + event-loop are
+TODOs. Pick this up by:
+
+  1. Decide your HID library (hidapi via `pip install hid`, or evdev on
+     Linux). Document it in `manifest.json::requirements`.
+  2. Implement `_listen` as an asyncio task that reads HID events and
+     calls `self._on_volume_up` on each press.
+  3. Match the "two presses in N ms" pattern (mirror the Android
+     `MediaEventPatternDetector.kt` logic — same domain shape, just
+     translated to Python).
+  4. Tests: feed synthetic timestamps to `_on_volume_up` and assert
+     `emit` is called exactly once per matched double-tap, never on
+     a single press, never on three presses spaced > window.
+
+Acceptance: vol-up-up likes the playing track; single vol-up still
+changes system volume. No state shared with TrayHotkeyTrigger.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+
+from like_spotify.core.trigger import EmitFn, Trigger
+
+DOUBLE_TAP_WINDOW_MS = 400
+
+
+class VolumeButtonTrigger(Trigger):
+    def __init__(self, double_tap_window_ms: int = DOUBLE_TAP_WINDOW_MS) -> None:
+        self._window_ms = double_tap_window_ms
+        self._last_press_ms: float | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._emit: EmitFn | None = None
+        self._task: asyncio.Task | None = None
+
+    async def start(self, emit: EmitFn) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._emit = emit
+        # TODO: open the HID device here and spawn a listener task that
+        # calls `self._on_volume_up()` on each press event.
+        self._task = self._loop.create_task(self._listen())
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None
+        # TODO: close the HID device here.
+
+    async def _listen(self) -> None:
+        # TODO: replace with a real `await device.read()` loop.
+        raise NotImplementedError("VolumeButtonTrigger HID listener — see TODOs")
+
+    def _on_volume_up(self, now_ms: float | None = None) -> None:
+        now_ms = now_ms if now_ms is not None else time.monotonic() * 1000
+        if (
+            self._last_press_ms is not None
+            and (now_ms - self._last_press_ms) <= self._window_ms
+        ):
+            # Double-tap matched — emit and reset so a third press doesn't
+            # also fire.
+            self._last_press_ms = None
+            if self._loop is not None and self._emit is not None:
+                asyncio.run_coroutine_threadsafe(self._emit(), self._loop)
+            return
+        self._last_press_ms = now_ms
+
+
+def TRIGGER(**_cfg) -> VolumeButtonTrigger:
+    return VolumeButtonTrigger()
+```
+
+### 2. `MusicProvider` — read playback + write a like
+
+```python
+# like_spotify/core/music_provider.py
+class MusicProvider(ABC):
+    @abstractmethod
+    async def get_currently_playing(self) -> CurrentTrack | None: ...
+    @abstractmethod
+    async def like(self, track: CurrentTrack) -> None: ...
+    @abstractmethod
+    async def is_liked(self, track: CurrentTrack) -> bool: ...
+    @abstractmethod
+    async def user_id(self) -> str: ...
+```
+
+Most second providers won't ship in Phase 1 (Spotify owns the world for
+this app), but the seam is wide enough to wrap YouTube Music, Tidal,
+or local Mopidy. Adding one is the second-implementation moment for
+this interface — refactoring around it is welcomed.
+
+OAuth flows belong inside the extension. See `extensions/spotify/`
+for a PKCE example (~70 LOC) and `like_spotify/auth/google.py` for an
+installed-app OAuth pattern with refresh.
+
+### 3. `Storage` — count likes across devices
+
+```python
+# like_spotify/core/storage.py
+class Storage(ABC):
+    @abstractmethod
+    async def increment(
+        self, user_id: str, track: CurrentTrack, was_already_liked: bool = False
+    ) -> int: ...
+    @abstractmethod
+    async def get_count(self, user_id: str, track: CurrentTrack) -> int: ...
+    @abstractmethod
+    async def record_artist_track(
+        self, user_id: str, artist_id: str, track_id: str
+    ) -> int: ...
+```
+
+`increment` is the hot path; it must be safe to call concurrently from
+multiple devices and return the new count. `was_already_liked` is the
+backfill flag — on first encounter with `True`, seed `count=2` and a
+`backfilled=TRUE` marker, otherwise `count=1`. See
+[#24](https://github.com/Osasuwu/like_spotify_mobile_app/issues/24)
+for why this exists.
+
+**Existing impls** (≥2, so the abstraction is real):
+
+- `supabase_storage` — Postgres RPC (`increment_track_like`).
+- `google_sheets_storage` — REST PUT/APPEND on a sheet.
+
+**Wanted next** (good-first-PR): `sqlite_storage` for users who don't
+want a cloud backend. The shared contract test in
+`tests/test_storage_contract.py` is parametrised over
+`(SupabaseStorage | GoogleSheetsStorage)` already — drop a SQLite
+fixture in there and you get all seven invariants for free.
+
+### 4. `PreLikeAction` — veto a like before it happens
+
+```python
+# like_spotify/core/actions.py
+class PreLikeAction(ABC):
+    @abstractmethod
+    async def run(self, ctx: LikeContext) -> bool: ...
+```
+
+Returning `False` aborts the like (feedback shows "Skipped by
+`<ActionName>`"). Pre-actions are independent: a raising pre-action is
+logged and skipped, later pre-actions still run, the like still
+proceeds. **Independence is the contract** — if you need a hard veto
+that survives a raise, raise from inside `run` and the host will catch
+it; but plan around that as the rare case.
+
+No `PreLikeAction` ships in default flavor yet — first impl is the
+obvious good-first-PR. Examples: "skip likes on tracks shorter than
+30s", "skip on the first 10s of a track (probably a misclick)".
+
+### 5. `PostLikeAction` — react to a successful like
+
+```python
+class PostLikeAction(ABC):
+    @abstractmethod
+    async def run(self, ctx: LikeContext) -> None: ...
+```
+
+Each action runs independently; a raise is logged and the chain
+continues (mirrors the Pre-action rule). The `ctx.like_count` field
+is populated by Storage *before* the post-chain runs — that's how
+`PromoteToBestOfAction` gates on "liked 3+ times".
+
+Existing impls: `archive_remove`, `promote_to_best_of`, `follow_artist`.
+
+**Provider-aware actions** downcast: if your action needs a
+Spotify-only API (e.g. playlist manipulation), check
+`isinstance(ctx.music_provider, SpotifyMusicProvider)` and use its
+provider-specific methods. Ship the action in a folder coupled to the
+provider's name, so the soft dependency is visible.
+
+## Adding an extension — checklist
+
+1. Create `like_spotify/extensions/<your_domain>/__init__.py` with the
+   concrete class and the matching top-level factory name (`TRIGGER`,
+   `MUSIC_PROVIDER`, `STORAGE`, `PRE_LIKE_ACTION`, or
+   `POST_LIKE_ACTION`).
+2. Create `manifest.json` next to it. The required keys are
+   `domain`, `extension_point`, `name`, `description`,
+   `codeowners`, `requirements`, and `stage`.
+3. Register the manifest in `pyproject.toml`'s
+   `[tool.setuptools.package-data]` block so it ships in the wheel.
+4. If the extension needs configuration, prompt for it in
+   `like_spotify/hosts/_common.py::do_setup` (the wizard) and read it
+   from `cfg` in the relevant `_build_*` helper.
+5. Tests under `tests/`. For `Storage`, drop your fixture into the
+   parametrised contract suite (`tests/test_storage_contract.py`). For
+   everything else, small async unit tests against the interface +
+   one slice in `tests/test_pipeline.py` if the host wiring is novel.
 
 ## Running tests
 

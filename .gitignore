@@ -55,6 +55,14 @@ app.*.map.json
 __pycache__/
 *.egg-info/
 .pytest_cache/
-/dist/
+.coverage
+htmlcov/
+**/dist/
+**/build/
 tools/build/
 tools/dist/
+
+# Python virtualenvs (devs may scaffold a build venv at the repo root)
+.venv/
+.venv-*/
+venv/

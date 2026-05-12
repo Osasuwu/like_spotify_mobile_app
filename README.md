@@ -1,6 +1,10 @@
 # Like Spotify
 
-Like the currently playing Spotify track with a headset button pattern (Android) or keyboard shortcut (desktop). Manages a Discover Weekly archive playlist — liked tracks are removed so you never re-listen to them.
+**One-button Spotify automation across your phone and laptop.** Like the currently-playing track with a headset pause-play pattern (Android) or a global keyboard hotkey (Windows tray; macOS / Linux CLI). On top of "like", a small rule engine runs per like: remove from an archive playlist (Discover Weekly clean-up), promote a track to a "best-of" playlist when you've liked it N times across devices, auto-follow an artist after N liked tracks. Counters live in Supabase or Google Sheets so phone + laptop see the same numbers.
+
+The desktop side is a **pluggable framework**, not a single tool. Five extension points — `Trigger`, `MusicProvider`, `Storage`, `PreLikeAction`, `PostLikeAction` — discover at startup via a filesystem convention (each extension is a folder with a `manifest.json` and a `TRIGGER` / `MUSIC_PROVIDER` / `STORAGE` / `PRE_LIKE_ACTION` / `POST_LIKE_ACTION` factory). Drop a folder, restart, your code runs in the like pipeline. See [CONTRIBUTING.md](CONTRIBUTING.md) for the plugin-author guide.
+
+Keywords for the search-engine crowd: spotify like hotkey, spotify automation, headset pause-play like, spotify scrobbler alternative, spotify plugin framework, cross-device like counter.
 
 ## How it works
 
@@ -9,6 +13,18 @@ Like the currently playing Spotify track with a headset button pattern (Android)
 3. **Archive cleanup** — if the track is in your archive playlist, it gets removed
 4. **Best-of promotion** — like a track 3 times across devices and it's added to your best-of playlist
 5. **Artist follow** — like 5+ tracks from an artist and they get auto-followed
+
+## How it compares
+
+There are several adjacent projects in this space; they solve overlapping problems but none solve all four of *one-press cross-device like + rule engine + headset-button trigger on phone + plugin framework on desktop*.
+
+| Project | One-press like | Headset trigger (phone) | Hotkey trigger (desktop) | Rule engine (archive/best-of/follow) | Cross-device counters | Pluggable | Use **theirs** when |
+|---|---|---|---|---|---|---|---|
+| **Like Spotify** (this) | ✓ | ✓ Android | ✓ Windows tray + mac/linux CLI | ✓ | ✓ Supabase / Sheets | ✓ 5 typed seams + manifest discovery | n/a |
+| [Pano Scrobbler](https://github.com/kawaiiDango/pano-scrobbler) | partial (love via UI) | — (notification scrape) | — | — (scrobble target only) | — | provider seam only (write target) | you want **scrobbling history** to last.fm/listenbrainz/librefm/pleroma. Pano is the right answer for "where did my listens go" — we don't try to replace it. |
+| [SpotifyHotKeys.ahk](https://github.com/rjmccallumbigl/SpotifyHotKeys.ahk) | ✓ (like / unlike) | — | ✓ Windows only (AutoHotKey) | — | — | — | you already live in AutoHotKey and want a small single-file script you can paste & edit. We're heavier (Python install) but cross-platform and rule-capable. |
+| [Music Assistant](https://www.music-assistant.io/) | partial (per-provider) | — | via Home Assistant | extensive (queue / library / sync) | — (per-instance) | ✓ ~60 providers | you want **Home Assistant-grade music orchestration** — multi-provider library merging, multi-room sync, queue scripting. We don't try to be your music server; we sit next to your existing Spotify client. |
+| [n8n](https://n8n.io/) / Zapier / IFTTT | only via polling | — | — | yes (general workflows) | yes (workflow vars) | ✓ generic | you want **a generic workflow engine** with a UI and 400+ integrations. We're the inverse — narrow to "like + post-like rules", but one button press and ~30 ms latency vs minutes of polling. |
 
 ## Quick start
 
