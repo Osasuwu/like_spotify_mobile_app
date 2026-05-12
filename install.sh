@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#
+# One-liner installer for Like Spotify on macOS / Linux.
+#
+# Checks for Python 3.11+, installs pipx if missing, installs the
+# like-spotify package from this repo, then runs the interactive setup
+# wizard. Re-runnable; existing tokens are kept unless --reauth is
+# passed.
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/Osasuwu/like_spotify_mobile_app/main/install.sh | bash
+#
+#   # Re-run OAuth (after revoking access or switching accounts):
+#   ./install.sh --reauth
+#
+#   # From a local checkout, point at the source dir:
+#   ./install.sh --source /path/to/checkout
+
+set -euo pipefail
+
+REAUTH=0
+SKIP_SETUP=0
+SOURCE="."
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --reauth) REAUTH=1 ;;
+        --skip-setup) SKIP_SETUP=1 ;;
+        --source) SOURCE="$2"; shift ;;
+        -h|--help)
+            sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *) echo "unknown arg: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+step() { printf '\033[1;36m>> %s\033[0m\n' "$*"; }
+ok()   { printf '\033[0;32m   ok: %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m   warn: %s\033[0m\n' "$*"; }
+err()  { printf '\033[1;31m   err: %s\033[0m\n' "$*" >&2; }
+
+# ── Python ─────────────────────────────────────────────────────────────
+
+step "Checking for Python >= 3.11"
+PY=""
+for candidate in python3.13 python3.12 python3.11 python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+            PY="$candidate"
+            ok "found $($candidate --version 2>&1) via '$candidate'"
+            break
+        fi
+    fi
+done
+
+if [[ -z "$PY" ]]; then
+    err "Python 3.11+ not found."
+    case "$(uname -s)" in
+        Darwin) echo "      Install via: brew install python@3.12" ;;
+        Linux)  echo "      Install via your distro (e.g. apt install python3.12 python3.12-venv)" ;;
+    esac
+    exit 2
+fi
+
+# ── pipx ───────────────────────────────────────────────────────────────
+
+step "Ensuring pipx is available"
+if command -v pipx >/dev/null 2>&1; then
+    ok "pipx already present"
+else
+    step "Installing pipx (user-local)"
+    "$PY" -m pip install --user --upgrade pipx
+    "$PY" -m pipx ensurepath
+    # Try to make it available in the current shell session.
+    export PATH="$HOME/.local/bin:$PATH"
+    if ! command -v pipx >/dev/null 2>&1; then
+        warn "pipx not on PATH yet — open a new shell and re-run install.sh, or add ~/.local/bin to PATH."
+        exit 2
+    fi
+    ok "pipx installed"
+fi
+
+# ── like-spotify ───────────────────────────────────────────────────────
+
+step "Installing like-spotify from '$SOURCE'"
+pipx install --force "$SOURCE"
+ok "like-spotify on PATH"
+
+# ── setup ──────────────────────────────────────────────────────────────
+
+if [[ "$SKIP_SETUP" == "1" ]]; then
+    step "Skipping --setup (per --skip-setup)"
+    echo "Next: run 'like-spotify --setup' manually."
+    exit 0
+fi
+
+step "Launching interactive setup"
+setup_args=(--setup)
+[[ "$REAUTH" == "1" ]] && setup_args+=(--reauth)
+if ! like-spotify "${setup_args[@]}"; then
+    rc=$?
+    warn "setup exited with code $rc. Re-run 'like-spotify --setup' once you have the credentials."
+    exit "$rc"
+fi
+
+echo
+step "Done."
+case "$(uname -s)" in
+    Darwin)
+        echo "       macOS: no resident tray host yet. Use 'like-spotify like-once' to like the current track,"
+        echo "              or bind it to a hotkey via Shortcuts / Karabiner."
+        ;;
+    Linux)
+        echo "       Linux: no resident tray host yet. Use 'like-spotify like-once' to like the current track,"
+        echo "              or bind it to a hotkey via your DE's shortcut settings."
+        ;;
+esac
+echo "       See CONTRIBUTING.md for the hosts/macos.py / linux.py good-first-PR."
