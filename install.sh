@@ -99,8 +99,11 @@ fi
 step "Launching interactive setup"
 setup_args=(--setup)
 [[ "$REAUTH" == "1" ]] && setup_args+=(--reauth)
-if ! like-spotify "${setup_args[@]}"; then
-    rc=$?
+# Don't use `if ! cmd`: in bash that captures the exit code of `!`, not
+# the command, masking real failures behind a 0 exit. Capture rc directly.
+rc=0
+like-spotify "${setup_args[@]}" || rc=$?
+if [[ "$rc" -ne 0 ]]; then
     warn "setup exited with code $rc. Re-run 'like-spotify --setup' once you have the credentials."
     exit "$rc"
 fi

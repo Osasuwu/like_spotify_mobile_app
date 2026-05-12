@@ -103,11 +103,25 @@ def authorize(client_id: str, client_secret: str, token_path: Path) -> dict:
         def log_message(self, *_args):
             pass
 
-    server = socketserver.TCPServer(("127.0.0.1", REDIRECT_PORT), Handler)
-    threading.Thread(target=server.handle_request, daemon=True).start()
-    webbrowser.open(url)
-    event.wait(timeout=180)
-    server.server_close()
+    # `allow_reuse_address` lets us re-bind a port that's still in
+    # TIME_WAIT from a previous --setup run on the same shell. Without
+    # it the second invocation crashed `--setup` with a bare OSError.
+    class _ReusableServer(socketserver.TCPServer):
+        allow_reuse_address = True
+
+    try:
+        server = _ReusableServer(("127.0.0.1", REDIRECT_PORT), Handler)
+    except OSError as e:
+        raise AuthError(
+            f"could not bind 127.0.0.1:{REDIRECT_PORT} for the OAuth callback "
+            f"({e}). Close anything using that port and re-run --setup."
+        ) from e
+    try:
+        threading.Thread(target=server.handle_request, daemon=True).start()
+        webbrowser.open(url)
+        event.wait(timeout=180)
+    finally:
+        server.server_close()
 
     if captured["error"]:
         raise AuthError(f"google denied authorization: {captured['error']}")

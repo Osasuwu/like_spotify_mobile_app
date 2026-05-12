@@ -34,15 +34,24 @@ function Write-Warn2($msg){ Write-Host "   warn: $msg" -ForegroundColor Yellow }
 
 Write-Step "Checking for Python >= 3.11"
 
+# Each candidate is (exe, extra-args-array). `py -3` is the py launcher
+# with a version selector; `python` / `python3` are direct shims.
+$candidates = @(
+    @{ exe = "python";  args = @() },
+    @{ exe = "py";      args = @("-3") },
+    @{ exe = "python3"; args = @() }
+)
+
 $python = $null
-foreach ($candidate in @("python", "py -3", "python3")) {
+foreach ($c in $candidates) {
     try {
-        $version = & $candidate.Split(" ")[0] $candidate.Split(" ")[1..($candidate.Split(" ").Count - 1)] --version 2>$null
+        $version = & $c.exe @($c.args + "--version") 2>$null
         if ($LASTEXITCODE -eq 0 -and $version -match "Python (\d+)\.(\d+)") {
             $major = [int]$matches[1]; $minor = [int]$matches[2]
             if ($major -gt 3 -or ($major -eq 3 -and $minor -ge 11)) {
-                $python = $candidate
-                Write-Ok "found $version via '$candidate'"
+                $python = $c
+                $label = if ($c.args) { "$($c.exe) $($c.args -join ' ')" } else { $c.exe }
+                Write-Ok "found $version via '$label'"
                 break
             }
         }

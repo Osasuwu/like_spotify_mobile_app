@@ -82,12 +82,16 @@ def build_storage(cfg: dict) -> Storage | None:
     """
     backend = (cfg.get("storage", {}) or {}).get("backend", "")
 
-    # Back-compat for configs written before #28: a populated `supabase`
-    # block implies the user wanted Supabase even though the explicit
-    # `storage.backend` key didn't exist yet.
+    # Back-compat for configs written before #28:
+    #   - a populated `supabase` block implies Supabase
+    #   - OR SUPABASE_URL + SUPABASE_ANON_KEY env vars alone (the pre-#28
+    #     Android / CI path) — keep this working so existing deployments
+    #     don't regress when they upgrade.
     if not backend:
         sb = cfg.get("supabase", {}) if isinstance(cfg.get("supabase"), dict) else {}
         if sb.get("url") and sb.get("anon_key"):
+            backend = "supabase"
+        elif os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_ANON_KEY"):
             backend = "supabase"
 
     if backend == "supabase":
@@ -241,8 +245,10 @@ class _SetupAbort(Exception):
 def do_setup(reauth: bool = False) -> int:
     """Interactive wizard: Spotify OAuth → storage choice → autostart.
 
-    Re-runnable. Existing tokens are kept unless `--reauth` is passed
-    or the user picks a different storage backend.
+    Re-runnable. Existing OAuth tokens (Spotify, Google) are kept unless
+    `reauth=True` is passed — switching storage backend does NOT
+    invalidate the other backend's tokens, so a user can flip
+    supabase ↔ sheets without redoing OAuth.
     """
     print("Like Spotify — interactive setup")
     print("--------------------------------")

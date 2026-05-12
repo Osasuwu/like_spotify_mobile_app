@@ -266,6 +266,18 @@ def test_build_storage_supabase_back_compat_legacy_config(tmp_paths) -> None:
     assert type(storage).__name__ == "SupabaseStorage"
 
 
+def test_build_storage_supabase_back_compat_env_vars_only(
+    tmp_paths, monkeypatch
+) -> None:
+    """Pre-#28: only env vars (no config block at all) was a supported
+    deploy path. The dispatcher must keep that working."""
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "k")
+    storage = _common.build_storage({})
+    assert storage is not None
+    assert type(storage).__name__ == "SupabaseStorage"
+
+
 def test_build_storage_sheets_backend(tmp_paths) -> None:
     _common.GOOGLE_TOKEN_FILE.write_text(
         '{"refresh_token": "rt", "access_token": "at",'
