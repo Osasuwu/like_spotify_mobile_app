@@ -35,7 +35,7 @@ dev = [
 ]
 
 [project.scripts]
-like-spotify = "like_spotify.hosts.tray:main"
+like-spotify = "like_spotify.hosts:main"
 
 [project.urls]
 Repository = "https://github.com/Osasuwu/like_spotify_mobile_app"
@@ -50,6 +50,7 @@ exclude = ["tests*"]
 "like_spotify.extensions.follow_artist" = ["manifest.json"]
 "like_spotify.extensions.google_sheets_storage" = ["manifest.json"]
 "like_spotify.extensions.promote_to_best_of" = ["manifest.json"]
+"like_spotify.extensions.one_shot_cli_trigger" = ["manifest.json"]
 "like_spotify.extensions.spotify" = ["manifest.json"]
 "like_spotify.extensions.supabase_storage" = ["manifest.json"]
 "like_spotify.extensions.tray_hotkey_trigger" = ["manifest.json"]
