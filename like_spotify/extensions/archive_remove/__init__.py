@@ -1,0 +1,84 @@
+"""ArchiveRemoveAction — default flavor PostLikeAction.
+
+Removes the just-liked track from the user's "archive" playlist
+(typically a Discover-Weekly snapshot rotation, but the name is
+configurable). Spotify-specific by design — the action is in the
+Spotify-flavor extensions; non-Spotify providers are silently skipped
+so the chain stays composable across flavors.
+
+Idempotency (#23 AC): cache the archive playlist's track set on first
+encounter so the per-like path stays free of playlist API calls unless
+the track is actually present. The DELETE itself is also idempotent on
+Spotify's side, but we want to honour "no playlist API call" when
+nothing is there to remove.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from like_spotify.core.actions import PostLikeAction
+from like_spotify.core.types import LikeContext
+from like_spotify.extensions.spotify import SpotifyMusicProvider
+
+DOMAIN = "archive_remove"
+
+logger = logging.getLogger(__name__)
+
+
+class ArchiveRemoveAction(PostLikeAction):
+    """Remove the just-liked track from the configured archive playlist."""
+
+    def __init__(self, playlist_name: str) -> None:
+        if not playlist_name:
+            raise ValueError("archive playlist_name is required")
+        self._playlist_name = playlist_name
+        # Lazy: first call resolves id + fetches track set.
+        self._resolved = False
+        self._playlist_id: str | None = None
+        self._track_ids: set[str] = set()
+
+    async def run(self, ctx: LikeContext) -> None:
+        provider = ctx.music_provider
+        if not isinstance(provider, SpotifyMusicProvider):
+            # Other flavours don't speak Spotify playlist API. Silent no-op.
+            return
+
+        if not self._resolved:
+            await self._resolve(provider)
+        if not self._playlist_id:
+            return
+
+        track_id = ctx.track.provider_track_id
+        if track_id not in self._track_ids:
+            # AC: not in archive → no playlist API call.
+            return
+
+        await provider.remove_track_from_playlist(track_id, self._playlist_id)
+        # Update local snapshot so a re-trigger in the same session stays no-op.
+        self._track_ids.discard(track_id)
+
+    async def _resolve(self, provider: SpotifyMusicProvider) -> None:
+        self._resolved = True
+        try:
+            pid = await provider.find_playlist_by_name(self._playlist_name)
+        except Exception as e:
+            logger.warning("archive playlist lookup failed: %s", e)
+            return
+        if not pid:
+            logger.info(
+                "archive playlist %r not found — action is a no-op",
+                self._playlist_name,
+            )
+            return
+        self._playlist_id = pid
+        try:
+            self._track_ids = await provider.get_playlist_track_ids(pid)
+        except Exception as e:
+            logger.warning("archive playlist track fetch failed: %s", e)
+            self._track_ids = set()
+
+
+def POST_LIKE_ACTION(playlist_name: str) -> ArchiveRemoveAction:
+    """Factory called by the host. Signature widens in #28 (manifest deps)."""
+    return ArchiveRemoveAction(playlist_name=playlist_name)

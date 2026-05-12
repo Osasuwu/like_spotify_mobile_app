@@ -34,7 +34,10 @@ API_BASE = "https://api.spotify.com/v1"
 
 REDIRECT_PORT = 8793
 REDIRECT_URI = f"http://127.0.0.1:{REDIRECT_PORT}/callback"
-SCOPES = "user-library-modify user-library-read user-read-playback-state"
+SCOPES = (
+    "user-library-modify user-library-read user-read-playback-state "
+    "playlist-read-private playlist-modify-private playlist-modify-public"
+)
 
 
 class SpotifyMusicProvider(MusicProvider):
@@ -63,6 +66,21 @@ class SpotifyMusicProvider(MusicProvider):
             return self._user_id_cache
         self._user_id_cache = await asyncio.to_thread(self._fetch_user_id_sync)
         return self._user_id_cache
+
+    # ── Playlist API (used by Spotify-flavored Actions — NOT on the abstract base) ──
+
+    async def find_playlist_by_name(self, name: str) -> str | None:
+        """Case-insensitive lookup over the user's own playlists. None if absent."""
+        return await asyncio.to_thread(self._find_playlist_by_name_sync, name)
+
+    async def get_playlist_track_ids(self, playlist_id: str) -> set[str]:
+        """Snapshot of track IDs in the playlist. One paged fetch."""
+        return await asyncio.to_thread(self._get_playlist_track_ids_sync, playlist_id)
+
+    async def remove_track_from_playlist(self, track_id: str, playlist_id: str) -> None:
+        await asyncio.to_thread(
+            self._remove_track_from_playlist_sync, track_id, playlist_id
+        )
 
     # ── Auth (sync, called from setup; safe outside event loop) ───────
 
@@ -213,6 +231,62 @@ class SpotifyMusicProvider(MusicProvider):
         _raise_for_status(r)
         body = r.json()
         return bool(body) and bool(body[0])
+
+    def _find_playlist_by_name_sync(self, name: str) -> str | None:
+        needle = name.strip().lower()
+        offset = 0
+        while True:
+            token = self._access_token()
+            r = requests.get(
+                f"{API_BASE}/me/playlists",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"limit": 50, "offset": offset},
+                timeout=5,
+            )
+            _raise_for_status(r)
+            data = r.json()
+            items = data.get("items", [])
+            for p in items:
+                if (p.get("name") or "").strip().lower() == needle:
+                    return p.get("id")
+            if len(items) < 50:
+                return None
+            offset += 50
+
+    def _get_playlist_track_ids_sync(self, playlist_id: str) -> set[str]:
+        ids: set[str] = set()
+        offset = 0
+        while True:
+            token = self._access_token()
+            r = requests.get(
+                f"{API_BASE}/playlists/{playlist_id}/tracks",
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "limit": 100,
+                    "offset": offset,
+                    "fields": "items(track(id)),next",
+                },
+                timeout=10,
+            )
+            _raise_for_status(r)
+            data = r.json()
+            for item in data.get("items", []):
+                tid = (item.get("track") or {}).get("id")
+                if tid:
+                    ids.add(tid)
+            if not data.get("next"):
+                return ids
+            offset += 100
+
+    def _remove_track_from_playlist_sync(self, track_id: str, playlist_id: str) -> None:
+        token = self._access_token()
+        r = requests.delete(
+            f"{API_BASE}/playlists/{playlist_id}/tracks",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"tracks": [{"uri": f"spotify:track:{track_id}"}]},
+            timeout=5,
+        )
+        _raise_for_status(r)
 
     def _fetch_user_id_sync(self) -> str:
         token = self._access_token()

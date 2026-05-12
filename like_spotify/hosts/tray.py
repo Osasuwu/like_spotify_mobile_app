@@ -21,8 +21,12 @@ import threading
 import time
 from pathlib import Path
 
+from like_spotify.core.actions import PostLikeAction
 from like_spotify.core.pipeline import Pipeline
 from like_spotify.core.storage import Storage
+from like_spotify.extensions.archive_remove import (
+    POST_LIKE_ACTION as make_archive_remove_action,
+)
 from like_spotify.extensions.spotify import MUSIC_PROVIDER as make_spotify_provider
 from like_spotify.extensions.supabase_storage import STORAGE as make_supabase_storage
 from like_spotify.extensions.tray_hotkey_trigger import (
@@ -156,6 +160,29 @@ def _build_storage(cfg: dict) -> Storage | None:
         return None
 
 
+# ── Post-like actions ───────────────────────────────────────────────
+
+
+def _build_post_actions(cfg: dict) -> list[PostLikeAction]:
+    """Compose the default-flavor post-like chain.
+
+    Currently: ArchiveRemoveAction iff `actions.archive_playlist_name` is
+    configured. Promote-to-best-of and Follow-artist land in #26.
+    """
+    actions: list[PostLikeAction] = []
+    archive_name = (
+        (cfg.get("actions") or {}).get("archive_playlist_name")
+        or cfg.get("archive_playlist_name")  # legacy flat key
+        or ""
+    )
+    if archive_name:
+        try:
+            actions.append(make_archive_remove_action(playlist_name=archive_name))
+        except Exception:
+            pass
+    return actions
+
+
 # ── Autostart (Windows) ─────────────────────────────────────────────
 
 
@@ -285,7 +312,13 @@ def main(argv: list[str] | None = None) -> int:
 
     feedback = TrayFeedback(hotkey=hotkey)
     storage = _build_storage(cfg)
-    pipeline = Pipeline(provider=provider, feedback=feedback, storage=storage)
+    post_actions = _build_post_actions(cfg)
+    pipeline = Pipeline(
+        provider=provider,
+        feedback=feedback,
+        storage=storage,
+        post_like_actions=post_actions,
+    )
     trigger = make_tray_hotkey_trigger(hotkey=hotkey)
 
     loop = asyncio.new_event_loop()
