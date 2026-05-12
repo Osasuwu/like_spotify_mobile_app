@@ -63,11 +63,11 @@ class Pipeline:
         for action in self._pre_actions:
             try:
                 proceed = await action.run(ctx)
-            except Exception as e:
+            except Exception:
                 # An action's internal failure does NOT abort the like —
                 # the contract is "actions are independent". Log + continue.
                 logger.warning(
-                    "PreLikeAction %s raised: %s", type(action).__name__, e
+                    "PreLikeAction %s raised", type(action).__name__, exc_info=True
                 )
                 continue
             if not proceed:
@@ -108,9 +108,9 @@ class Pipeline:
         for action in self._post_actions:
             try:
                 await action.run(ctx)
-            except Exception as e:
+            except Exception:
                 logger.warning(
-                    "PostLikeAction %s raised: %s", type(action).__name__, e
+                    "PostLikeAction %s raised", type(action).__name__, exc_info=True
                 )
 
         title = "Liked" if ctx.like_count is None else f"Liked × {ctx.like_count}"

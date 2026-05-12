@@ -170,8 +170,9 @@ def _build_post_actions(cfg: dict) -> list[PostLikeAction]:
     configured. Promote-to-best-of and Follow-artist land in #26.
     """
     actions: list[PostLikeAction] = []
+    nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
     archive_name = (
-        (cfg.get("actions") or {}).get("archive_playlist_name")
+        nested.get("archive_playlist_name")
         or cfg.get("archive_playlist_name")  # legacy flat key
         or ""
     )

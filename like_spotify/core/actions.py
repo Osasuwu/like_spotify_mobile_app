@@ -14,8 +14,8 @@ class PreLikeAction(ABC):
     for this action only* — the chain continues. This keeps a flaky pre-
     action from blocking the user's intent.
 
-    No default impl ships in #23 — this is a contributor seam. Sketches in
-    `CONTRIBUTING.md`:
+    No default impl ships in #23 — this is a contributor seam. Sketches
+    (a future CONTRIBUTING.md, tracked in #29, will link these directly):
 
         class BlacklistFilter(PreLikeAction):
             async def run(self, ctx: LikeContext) -> bool:

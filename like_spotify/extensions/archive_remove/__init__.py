@@ -6,11 +6,14 @@ configurable). Spotify-specific by design — the action is in the
 Spotify-flavor extensions; non-Spotify providers are silently skipped
 so the chain stays composable across flavors.
 
-Idempotency (#23 AC): cache the archive playlist's track set on first
-encounter so the per-like path stays free of playlist API calls unless
-the track is actually present. The DELETE itself is also idempotent on
-Spotify's side, but we want to honour "no playlist API call" when
-nothing is there to remove.
+Idempotency (#23 AC): the first action invocation does one playlist
+lookup + one paged track fetch to populate an in-memory snapshot.
+Every subsequent like checks membership against that cache and only
+issues a DELETE when the track is actually present — so on the
+per-like hot path, a not-in-archive track makes ZERO playlist API
+calls. The DELETE itself is also idempotent on Spotify's side; the
+cache exists to honour the AC literally and to avoid burning API
+quota on common-case likes that aren't archived.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from __future__ import annotations
 import logging
 
 from like_spotify.core.actions import PostLikeAction
+from like_spotify.core.errors import AuthError
 from like_spotify.core.types import LikeContext
 from like_spotify.extensions.spotify import SpotifyMusicProvider
 
@@ -30,9 +34,10 @@ class ArchiveRemoveAction(PostLikeAction):
     """Remove the just-liked track from the configured archive playlist."""
 
     def __init__(self, playlist_name: str) -> None:
-        if not playlist_name:
-            raise ValueError("archive playlist_name is required")
-        self._playlist_name = playlist_name
+        normalized = (playlist_name or "").strip()
+        if not normalized:
+            raise ValueError("archive playlist_name is required (non-empty)")
+        self._playlist_name = normalized
         # Lazy: first call resolves id + fetches track set.
         self._resolved = False
         self._playlist_id: str | None = None
@@ -51,7 +56,9 @@ class ArchiveRemoveAction(PostLikeAction):
 
         track_id = ctx.track.provider_track_id
         if track_id not in self._track_ids:
-            # AC: not in archive → no playlist API call.
+            # Per-like hot path AC: not in archive → no DELETE issued.
+            # (One-time resolve fetch may have run during the first action
+            # invocation; see module docstring.)
             return
 
         await provider.remove_track_from_playlist(track_id, self._playlist_id)
@@ -62,6 +69,17 @@ class ArchiveRemoveAction(PostLikeAction):
         self._resolved = True
         try:
             pid = await provider.find_playlist_by_name(self._playlist_name)
+        except AuthError as e:
+            # 401/403 here usually means the cached OAuth token predates the
+            # playlist scope widening (#23). Re-running --setup grants the
+            # new scopes. Stay silent on the per-like path; let the user see
+            # this in the log.
+            logger.warning(
+                "archive playlist lookup unauthorized (%s) — re-run "
+                "`like-spotify --setup` to grant playlist scopes",
+                e,
+            )
+            return
         except Exception as e:
             logger.warning("archive playlist lookup failed: %s", e)
             return

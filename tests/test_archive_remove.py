@@ -5,9 +5,7 @@ Stub a SpotifyMusicProvider — we record method calls and don't go near HTTP.
 
 from __future__ import annotations
 
-import asyncio
 import time
-from typing import Any
 
 import pytest
 
@@ -83,14 +81,31 @@ async def test_track_in_archive_is_removed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_track_not_in_archive_no_playlist_api_call() -> None:
-    """AC: not in archive → no playlist DELETE call."""
+async def test_track_not_in_archive_no_delete_issued() -> None:
+    """AC: not in archive → no DELETE issued on the per-like path.
+
+    The first invocation still triggers the lazy resolve (one find + one
+    paged fetch); covered separately by
+    `test_first_call_resolves_then_subsequent_uses_cache` which verifies
+    that the per-like hot path has zero playlist API calls.
+    """
     provider = FakeSpotifyProvider(playlist_id="pl1", track_ids={"other"})
     action = ArchiveRemoveAction(playlist_name="My Archive")
 
     await action.run(LikeContext(track=_track("trk1"), music_provider=provider))
 
     assert provider.remove_calls == []
+    # Resolve happens on first call; that's expected (see module docstring).
+    assert provider.find_calls == ["My Archive"]
+
+
+@pytest.mark.asyncio
+async def test_constructor_strips_whitespace_only_name() -> None:
+    with pytest.raises(ValueError):
+        ArchiveRemoveAction(playlist_name="   ")
+    # Surrounding whitespace stripped; the name is still valid.
+    action = ArchiveRemoveAction(playlist_name="  My Archive  ")
+    assert action._playlist_name == "My Archive"
 
 
 @pytest.mark.asyncio

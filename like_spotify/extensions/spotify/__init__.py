@@ -70,7 +70,8 @@ class SpotifyMusicProvider(MusicProvider):
     # ── Playlist API (used by Spotify-flavored Actions — NOT on the abstract base) ──
 
     async def find_playlist_by_name(self, name: str) -> str | None:
-        """Case-insensitive lookup over the user's own playlists. None if absent."""
+        """Case-insensitive lookup over the user's library playlists (owned
+        + followed; the `/me/playlists` endpoint returns both). None if absent."""
         return await asyncio.to_thread(self._find_playlist_by_name_sync, name)
 
     async def get_playlist_track_ids(self, playlist_id: str) -> set[str]:
