@@ -64,6 +64,7 @@ class FakeStorage(Storage):
         # Records: (user_id, track_id, was_already_liked)
         self.increment_calls: list[tuple[str, str, bool]] = []
         self._rows: dict[tuple[str, str], dict] = {}
+        self._artist_seen: set[tuple[str, str, str]] = set()
 
     async def increment(
         self,
@@ -86,6 +87,12 @@ class FakeStorage(Storage):
 
     async def get_count(self, user_id: str, track: CurrentTrack) -> int:
         return self._rows.get((user_id, track.provider_track_id), {}).get("count", 0)
+
+    async def record_artist_track(
+        self, user_id: str, artist_id: str, track_id: str
+    ) -> int:
+        self._artist_seen.add((user_id, artist_id, track_id))
+        return sum(1 for u, a, _t in self._artist_seen if u == user_id and a == artist_id)
 
     def row(self, user_id: str, track_id: str) -> dict:
         return self._rows[(user_id, track_id)]

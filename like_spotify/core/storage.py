@@ -38,3 +38,15 @@ class Storage(ABC):
     @abstractmethod
     async def get_count(self, user_id: str, track: CurrentTrack) -> int:
         """Current count for (user, track). 0 if never liked."""
+
+    @abstractmethod
+    async def record_artist_track(
+        self, user_id: str, artist_id: str, track_id: str
+    ) -> int:
+        """Record that user has liked a track by this artist; return the
+        distinct-tracks-per-artist count for (user, artist).
+
+        Idempotent: re-recording the same (user, artist, track) triple
+        does NOT increment the count. Used by `FollowArtistAction` (#26)
+        to decide when to auto-follow an artist crossing a like-threshold.
+        """

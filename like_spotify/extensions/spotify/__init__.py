@@ -36,7 +36,8 @@ REDIRECT_PORT = 8793
 REDIRECT_URI = f"http://127.0.0.1:{REDIRECT_PORT}/callback"
 SCOPES = (
     "user-library-modify user-library-read user-read-playback-state "
-    "playlist-read-private playlist-modify-private playlist-modify-public"
+    "playlist-read-private playlist-modify-private playlist-modify-public "
+    "user-follow-modify user-follow-read"
 )
 
 
@@ -82,6 +83,19 @@ class SpotifyMusicProvider(MusicProvider):
         await asyncio.to_thread(
             self._remove_track_from_playlist_sync, track_id, playlist_id
         )
+
+    async def add_track_to_playlist(self, track_id: str, playlist_id: str) -> None:
+        await asyncio.to_thread(
+            self._add_track_to_playlist_sync, track_id, playlist_id
+        )
+
+    async def find_or_create_playlist(self, name: str) -> str:
+        """Return the id of the playlist with `name`, creating a private
+        one under the current user if absent. Idempotent."""
+        return await asyncio.to_thread(self._find_or_create_playlist_sync, name)
+
+    async def follow_artist(self, artist_id: str) -> None:
+        await asyncio.to_thread(self._follow_artist_sync, artist_id)
 
     # ── Auth (sync, called from setup; safe outside event loop) ───────
 
@@ -285,6 +299,51 @@ class SpotifyMusicProvider(MusicProvider):
             f"{API_BASE}/playlists/{playlist_id}/tracks",
             headers={"Authorization": f"Bearer {token}"},
             json={"tracks": [{"uri": f"spotify:track:{track_id}"}]},
+            timeout=5,
+        )
+        _raise_for_status(r)
+
+    def _add_track_to_playlist_sync(self, track_id: str, playlist_id: str) -> None:
+        token = self._access_token()
+        r = requests.post(
+            f"{API_BASE}/playlists/{playlist_id}/tracks",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"uris": [f"spotify:track:{track_id}"]},
+            timeout=5,
+        )
+        _raise_for_status(r)
+
+    def _find_or_create_playlist_sync(self, name: str) -> str:
+        existing = self._find_playlist_by_name_sync(name)
+        if existing:
+            return existing
+        # Create under the authenticated user.
+        token = self._access_token()
+        # _fetch_user_id_sync caches; reusing keeps the create path 1 extra call.
+        uid = self._user_id_cache or self._fetch_user_id_sync()
+        self._user_id_cache = uid
+        r = requests.post(
+            f"{API_BASE}/users/{uid}/playlists",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "name": name,
+                "public": False,
+                "description": "Managed by Like Spotify",
+            },
+            timeout=5,
+        )
+        _raise_for_status(r)
+        pid = r.json().get("id")
+        if not pid:
+            raise RuntimeError("playlist create returned no id")
+        return pid
+
+    def _follow_artist_sync(self, artist_id: str) -> None:
+        token = self._access_token()
+        r = requests.put(
+            f"{API_BASE}/me/following",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"type": "artist", "ids": artist_id},
             timeout=5,
         )
         _raise_for_status(r)

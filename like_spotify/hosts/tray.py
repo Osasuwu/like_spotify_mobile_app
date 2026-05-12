@@ -27,6 +27,12 @@ from like_spotify.core.storage import Storage
 from like_spotify.extensions.archive_remove import (
     POST_LIKE_ACTION as make_archive_remove_action,
 )
+from like_spotify.extensions.follow_artist import (
+    POST_LIKE_ACTION as make_follow_artist_action,
+)
+from like_spotify.extensions.promote_to_best_of import (
+    POST_LIKE_ACTION as make_promote_to_best_of_action,
+)
 from like_spotify.extensions.spotify import MUSIC_PROVIDER as make_spotify_provider
 from like_spotify.extensions.supabase_storage import STORAGE as make_supabase_storage
 from like_spotify.extensions.tray_hotkey_trigger import (
@@ -163,24 +169,65 @@ def _build_storage(cfg: dict) -> Storage | None:
 # ── Post-like actions ───────────────────────────────────────────────
 
 
-def _build_post_actions(cfg: dict) -> list[PostLikeAction]:
+def _build_post_actions(
+    cfg: dict, storage: Storage | None
+) -> list[PostLikeAction]:
     """Compose the default-flavor post-like chain.
 
-    Currently: ArchiveRemoveAction iff `actions.archive_playlist_name` is
-    configured. Promote-to-best-of and Follow-artist land in #26.
+    Each action is independently togglable: omit / blank the relevant
+    config key OR set `actions.<name>.enabled = false` to skip it.
     """
     actions: list[PostLikeAction] = []
     nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
+
+    # ── ArchiveRemoveAction ──────────────────────────────────────────
+    archive_cfg = nested.get("archive_remove") if isinstance(nested.get("archive_remove"), dict) else {}
     archive_name = (
-        nested.get("archive_playlist_name")
+        archive_cfg.get("playlist_name")
+        or nested.get("archive_playlist_name")
         or cfg.get("archive_playlist_name")  # legacy flat key
         or ""
     )
-    if archive_name:
+    if archive_name and archive_cfg.get("enabled", True):
         try:
             actions.append(make_archive_remove_action(playlist_name=archive_name))
         except Exception:
             pass
+
+    # ── PromoteToBestOfAction ────────────────────────────────────────
+    best_of_cfg = nested.get("promote_to_best_of") if isinstance(nested.get("promote_to_best_of"), dict) else {}
+    best_of_name = (
+        best_of_cfg.get("playlist_name")
+        or nested.get("best_of_playlist_name")
+        or cfg.get("best_of_playlist_name")  # legacy flat
+        or ""
+    )
+    if best_of_name and best_of_cfg.get("enabled", True):
+        try:
+            actions.append(
+                make_promote_to_best_of_action(
+                    playlist_name=best_of_name,
+                    threshold=int(best_of_cfg.get("threshold", 3)),
+                )
+            )
+        except Exception:
+            pass
+
+    # ── FollowArtistAction ───────────────────────────────────────────
+    # Requires Storage (uses record_artist_track).
+    follow_cfg = nested.get("follow_artist") if isinstance(nested.get("follow_artist"), dict) else {}
+    follow_enabled = follow_cfg.get("enabled", True) and storage is not None
+    if follow_enabled:
+        try:
+            actions.append(
+                make_follow_artist_action(
+                    storage=storage,
+                    threshold=int(follow_cfg.get("threshold", 5)),
+                )
+            )
+        except Exception:
+            pass
+
     return actions
 
 
@@ -313,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
 
     feedback = TrayFeedback(hotkey=hotkey)
     storage = _build_storage(cfg)
-    post_actions = _build_post_actions(cfg)
+    post_actions = _build_post_actions(cfg, storage)
     pipeline = Pipeline(
         provider=provider,
         feedback=feedback,
