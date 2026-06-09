@@ -1,12 +1,24 @@
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 from .actions import PostLikeAction, PreLikeAction
 from .music_provider import MusicProvider
 from .storage import Storage
 from .types import CurrentTrack, LikeContext
 
-FeedbackFn = Callable[[bool, str, str], None]
+
+class FeedbackFn(Protocol):
+    """(success, title, message) plus an optional keyword `kind` that hosts
+    use to pick a distinct confirmation sound — "like" (default), "remove",
+    or whatever a future flow needs. Callers that don't care omit `kind`;
+    feedback impls default it to "like", so the 3-arg call stays valid
+    everywhere. A Protocol (not `Callable[..., None]`) so mypy/pyright still
+    catch mismatched argument types at the call site."""
+
+    def __call__(
+        self, success: bool, title: str, message: str, *, kind: str = "like"
+    ) -> None: ...
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +127,102 @@ class Pipeline:
 
         title = "Liked" if ctx.like_count is None else f"Liked × {ctx.like_count}"
         self._feedback(True, title, _display(ctx.track))
+
+
+class RemoveFromPlaylistPipeline:
+    """Remove the currently-playing track from a named playlist — no like.
+
+    Powers the "I don't want this in my Discover Weekly archive" hotkey.
+    The like flow's `ArchiveRemoveAction` only fires *after* a like, so it
+    can't help with tracks the user dislikes; this is the second intent —
+    a separate Trigger wired here lets the user curate a playlist without
+    liking the track.
+
+    Provider-agnostic by duck typing: it needs `get_currently_playing`
+    (on the `MusicProvider` base) plus `find_playlist_by_name` /
+    `remove_track_from_playlist` (Spotify-flavored extras, not on the
+    base). A provider lacking the playlist API gets a clean error
+    feedback rather than an exception — keeping `core` free of any
+    extension import.
+
+    The resolved playlist id is cached after the first successful lookup.
+    A miss (playlist not found, or a lookup error) is *not* cached, and a
+    cached id is dropped again if the remove call later fails (the playlist
+    may have been deleted/renamed) — so a later press re-resolves. Useful in
+    a long-lived tray when the user creates the playlist after launch.
+
+    Slice: #43 (remove-without-like hotkey).
+    """
+
+    def __init__(
+        self,
+        provider: MusicProvider,
+        feedback: FeedbackFn,
+        playlist_name: str,
+    ) -> None:
+        normalized = (playlist_name or "").strip()
+        if not normalized:
+            raise ValueError("remove playlist_name is required (non-empty)")
+        self._provider = provider
+        self._feedback = feedback
+        self._playlist_name = normalized
+        self._playlist_id: str | None = None
+
+    async def run_once(self) -> None:
+        try:
+            track = await self._provider.get_currently_playing()
+        except Exception as e:
+            self._feedback(
+                False, "Error", f"Could not read playback: {e}", kind="remove"
+            )
+            return
+
+        if track is None:
+            self._feedback(False, "Nothing playing", "", kind="remove")
+            return
+
+        finder = getattr(self._provider, "find_playlist_by_name", None)
+        remover = getattr(self._provider, "remove_track_from_playlist", None)
+        if finder is None or remover is None:
+            self._feedback(
+                False,
+                "Remove unsupported",
+                "provider has no playlist API",
+                kind="remove",
+            )
+            return
+
+        if self._playlist_id is None:
+            try:
+                self._playlist_id = await finder(self._playlist_name)
+            except Exception as e:
+                # Not cached — next press retries.
+                self._feedback(
+                    False, "Playlist lookup failed", str(e), kind="remove"
+                )
+                return
+            if not self._playlist_id:
+                self._feedback(
+                    False, "Playlist not found", self._playlist_name, kind="remove"
+                )
+                return
+
+        try:
+            await remover(track.provider_track_id, self._playlist_id)
+        except Exception as e:
+            # The cached id may be stale (playlist deleted/renamed since the
+            # last resolve) — drop it so the next press re-resolves instead
+            # of failing forever against a dead id.
+            self._playlist_id = None
+            self._feedback(False, "Remove failed", str(e), kind="remove")
+            return
+
+        self._feedback(
+            True,
+            f"Removed from {self._playlist_name}",
+            _display(track),
+            kind="remove",
+        )
 
 
 def _display(track: CurrentTrack) -> str:

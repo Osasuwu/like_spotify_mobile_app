@@ -16,7 +16,7 @@ import pytest
 
 from like_spotify.core.actions import PostLikeAction, PreLikeAction
 from like_spotify.core.music_provider import MusicProvider
-from like_spotify.core.pipeline import Pipeline
+from like_spotify.core.pipeline import Pipeline, RemoveFromPlaylistPipeline
 from like_spotify.core.storage import Storage
 from like_spotify.core.types import CurrentTrack, LikeContext
 
@@ -101,9 +101,13 @@ class FakeStorage(Storage):
 class Feedback:
     def __init__(self) -> None:
         self.calls: list[tuple[bool, str, str]] = []
+        self.kinds: list[str] = []
 
-    def __call__(self, success: bool, title: str, message: str) -> None:
+    def __call__(
+        self, success: bool, title: str, message: str, *, kind: str = "like"
+    ) -> None:
         self.calls.append((success, title, message))
+        self.kinds.append(kind)
 
 
 def _track(track_id: str = "abc123") -> CurrentTrack:
@@ -415,3 +419,212 @@ async def test_post_action_failure_does_not_abort_chain() -> None:
 
     assert broken.calls and healthy.calls
     assert fb.calls[0][0] is True  # Like still reported as success.
+
+
+# ── #43: RemoveFromPlaylistPipeline (remove-without-like hotkey) ────────
+
+
+class FakeRemoveProvider(MusicProvider):
+    """Provider with the Spotify-flavored playlist API the remove flow needs."""
+
+    def __init__(
+        self,
+        track: CurrentTrack | None,
+        playlist_id: str | None = "pl1",
+        get_raises: Exception | None = None,
+        find_raises: Exception | None = None,
+        remove_raises: Exception | None = None,
+        remove_raises_once: bool = False,
+    ):
+        self._track = track
+        self._playlist_id = playlist_id
+        self._get_raises = get_raises
+        self._find_raises = find_raises
+        self._remove_raises = remove_raises
+        self._remove_raises_once = remove_raises_once
+        self.find_calls: list[str] = []
+        self.remove_calls: list[tuple[str, str]] = []
+
+    async def get_currently_playing(self) -> CurrentTrack | None:
+        if self._get_raises is not None:
+            raise self._get_raises
+        return self._track
+
+    async def like(self, track: CurrentTrack) -> None:  # pragma: no cover
+        raise AssertionError("remove flow must not like")
+
+    async def is_liked(self, track: CurrentTrack) -> bool:  # pragma: no cover
+        raise AssertionError("remove flow must not probe is_liked")
+
+    async def user_id(self) -> str:  # pragma: no cover
+        return "user-id"
+
+    async def find_playlist_by_name(self, name: str) -> str | None:
+        self.find_calls.append(name)
+        if self._find_raises is not None:
+            raise self._find_raises
+        return self._playlist_id
+
+    async def remove_track_from_playlist(
+        self, track_id: str, playlist_id: str
+    ) -> None:
+        self.remove_calls.append((track_id, playlist_id))
+        if self._remove_raises is not None and (
+            not self._remove_raises_once or len(self.remove_calls) == 1
+        ):
+            raise self._remove_raises
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_removes_current_track_without_liking() -> None:
+    provider = FakeRemoveProvider(track=_track("trk1"), playlist_id="pl1")
+    fb = Feedback()
+
+    await RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    ).run_once()
+
+    assert provider.remove_calls == [("trk1", "pl1")]
+    assert provider.find_calls == ["My Archive"]
+    assert fb.calls[0][0] is True
+    assert fb.calls[0][1] == "Removed from My Archive"
+    assert fb.kinds == ["remove"]
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_nothing_playing() -> None:
+    provider = FakeRemoveProvider(track=None)
+    fb = Feedback()
+
+    await RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    ).run_once()
+
+    assert provider.remove_calls == []
+    assert fb.calls == [(False, "Nothing playing", "")]
+    assert fb.kinds == ["remove"]
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_playlist_not_found_does_not_cache() -> None:
+    provider = FakeRemoveProvider(track=_track("trk1"), playlist_id=None)
+    fb = Feedback()
+    pipe = RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="Ghost"
+    )
+
+    await pipe.run_once()
+    await pipe.run_once()
+
+    assert provider.remove_calls == []
+    # Not cached → re-resolved on the second press.
+    assert provider.find_calls == ["Ghost", "Ghost"]
+    assert fb.calls[0] == (False, "Playlist not found", "Ghost")
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_caches_playlist_id_after_success() -> None:
+    provider = FakeRemoveProvider(track=_track("trk1"), playlist_id="pl1")
+    fb = Feedback()
+    pipe = RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    )
+
+    await pipe.run_once()
+    await pipe.run_once()
+
+    # find resolved once; both presses removed.
+    assert provider.find_calls == ["My Archive"]
+    assert provider.remove_calls == [("trk1", "pl1"), ("trk1", "pl1")]
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_provider_without_playlist_api() -> None:
+    provider = FakeProvider(track=_track("trk1"))  # like-flow only, no playlist API
+    fb = Feedback()
+
+    await RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    ).run_once()
+
+    assert fb.calls[0][:2] == (False, "Remove unsupported")
+    assert fb.kinds == ["remove"]
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_remove_failure_surfaces() -> None:
+    provider = FakeRemoveProvider(
+        track=_track("trk1"), playlist_id="pl1", remove_raises=RuntimeError("boom")
+    )
+    fb = Feedback()
+
+    await RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    ).run_once()
+
+    assert fb.calls[0][:2] == (False, "Remove failed")
+    assert "boom" in fb.calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_drops_cache_after_remove_failure() -> None:
+    """A remove failure (stale id — playlist deleted/renamed) must drop the
+    cached id so the next press re-resolves instead of failing forever."""
+    provider = FakeRemoveProvider(
+        track=_track("trk1"),
+        playlist_id="pl1",
+        remove_raises=RuntimeError("gone"),
+        remove_raises_once=True,
+    )
+    fb = Feedback()
+    pipe = RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    )
+
+    await pipe.run_once()  # resolves pl1, remove raises → cache dropped
+    await pipe.run_once()  # re-resolves, then succeeds
+
+    # find called twice proves the cache was invalidated by the failure.
+    assert provider.find_calls == ["My Archive", "My Archive"]
+    assert provider.remove_calls == [("trk1", "pl1"), ("trk1", "pl1")]
+    assert fb.calls[0][:2] == (False, "Remove failed")
+    assert fb.calls[1][0] is True
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_lookup_failure_does_not_cache() -> None:
+    provider = FakeRemoveProvider(
+        track=_track("trk1"), find_raises=RuntimeError("net")
+    )
+    fb = Feedback()
+    pipe = RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    )
+
+    await pipe.run_once()
+    await pipe.run_once()
+
+    assert provider.find_calls == ["My Archive", "My Archive"]
+    assert provider.remove_calls == []
+    assert fb.calls[0][:2] == (False, "Playlist lookup failed")
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_get_currently_playing_failure() -> None:
+    provider = FakeRemoveProvider(track=None, get_raises=RuntimeError("api down"))
+    fb = Feedback()
+
+    await RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    ).run_once()
+
+    assert fb.calls[0][:2] == (False, "Error")
+    assert provider.remove_calls == []
+
+
+def test_remove_pipeline_rejects_blank_playlist_name() -> None:
+    with pytest.raises(ValueError):
+        RemoveFromPlaylistPipeline(
+            provider=FakeRemoveProvider(track=None), feedback=Feedback(),
+            playlist_name="   ",
+        )

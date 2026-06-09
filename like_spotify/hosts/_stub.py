@@ -17,13 +17,9 @@ Slice: #27.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 
 from like_spotify.core.pipeline import Pipeline
-from like_spotify.extensions.one_shot_cli_trigger import (
-    TRIGGER as make_one_shot_cli_trigger,
-)
 
 from . import _common
 
@@ -48,13 +44,22 @@ def _no_tray_message() -> str:
 
 
 class CliFeedback:
-    """Plain-stdout feedback for the CLI host."""
+    """Plain-stdout feedback for the CLI host.
+
+    Accepts the optional `kind` keyword (e.g. "remove") so the
+    remove-without-like pipeline can call it; the CLI has no audio, so
+    `kind` only affects nothing here — it's stored for tests / parity.
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[bool, str, str]] = []
+        self.kinds: list[str] = []
 
-    def __call__(self, success: bool, title: str, message: str) -> None:
+    def __call__(
+        self, success: bool, title: str, message: str, *, kind: str = "like"
+    ) -> None:
         self.calls.append((success, title, message))
+        self.kinds.append(kind)
         stream = sys.stdout if success else sys.stderr
         prefix = "[ok]" if success else "[err]"
         line = f"{prefix} {title}"
@@ -63,7 +68,8 @@ class CliFeedback:
         print(line, file=stream)
 
 
-def _run_like_once() -> int:
+def _resolved_provider_or_hint():
+    """(provider, None, cfg) when ready, else (None, exit_code, cfg)."""
     cfg = _common.load_config()
     client_id = _common.resolve_client_id(cfg)
     if not client_id:
@@ -71,7 +77,7 @@ def _run_like_once() -> int:
             "Not configured. Run:\n\n    like-spotify --setup\n",
             title="Like Spotify — setup required",
         )
-        return 2
+        return None, 2, cfg
 
     provider = _common.make_provider(client_id)
     if not provider.has_tokens:
@@ -79,7 +85,14 @@ def _run_like_once() -> int:
             "Not authenticated. Run:\n\n    like-spotify --setup\n",
             title="Like Spotify — auth required",
         )
-        return 2
+        return None, 2, cfg
+    return provider, None, cfg
+
+
+def _run_like_once() -> int:
+    provider, err, cfg = _resolved_provider_or_hint()
+    if provider is None:
+        return err
 
     feedback = CliFeedback()
     storage = _common.build_storage(cfg)
@@ -90,23 +103,23 @@ def _run_like_once() -> int:
         storage=storage,
         post_like_actions=post_actions,
     )
-    trigger = make_one_shot_cli_trigger()
+    return _common.run_one_shot(pipeline, feedback)
 
-    async def emit() -> None:
-        await pipeline.run_once()
 
-    async def run() -> None:
-        try:
-            await trigger.start(emit)
-        finally:
-            await trigger.stop()
+def _run_remove_once() -> int:
+    provider, err, cfg = _resolved_provider_or_hint()
+    if provider is None:
+        return err
 
-    asyncio.run(run())
-
-    # Exit code follows the like outcome — useful in scripts.
-    if not feedback.calls:
-        return 1
-    return 0 if feedback.calls[-1][0] else 1
+    feedback = CliFeedback()
+    pipeline = _common.build_remove_pipeline(cfg, provider, feedback)
+    if pipeline is None:
+        _common.msgbox(
+            "No archive playlist configured. Run:\n\n    like-spotify --setup\n",
+            title="Like Spotify — setup required",
+        )
+        return 2
+    return _common.run_one_shot(pipeline, feedback)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -119,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "like-once":
         return _run_like_once()
+    if args.command == "remove-once":
+        return _run_remove_once()
 
     # Default `run` on a non-tray platform: tell the user what works.
     print(_no_tray_message(), file=sys.stderr)

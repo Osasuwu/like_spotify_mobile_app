@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -85,6 +84,7 @@ def test_setup_supabase_writes_config_and_runs_oauth(
         "supabase",            # Storage backend
         "https://x.supabase.co",  # Supabase URL
         "anon-key-xyz",        # Supabase anon key
+        "",                    # [3/4] archive playlist name — blank = skip
         # autostart prompt only fires on win32 — we patch sys.platform off
     ]
     monkeypatch.setattr("builtins.input", _scripted_input(answers))
@@ -109,6 +109,7 @@ def test_setup_skips_spotify_oauth_when_tokens_present(
     monkeypatch.setattr("builtins.input", _scripted_input([
         "abc123client",
         "none",
+        "",  # [3/4] archive — skip
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
@@ -125,6 +126,7 @@ def test_setup_reauth_forces_oauth_even_with_tokens(
     monkeypatch.setattr("builtins.input", _scripted_input([
         "abc123client",
         "none",
+        "",  # [3/4] archive — skip
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
@@ -151,6 +153,7 @@ def test_setup_storage_none_writes_backend_marker(
     monkeypatch.setattr("builtins.input", _scripted_input([
         "abc123client",
         "none",
+        "",  # [3/4] archive — skip
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
@@ -161,6 +164,96 @@ def test_setup_storage_none_writes_backend_marker(
     # No supabase / sheets blocks created.
     assert "supabase" not in cfg or not cfg.get("supabase")
     assert "sheets" not in cfg or not cfg.get("sheets")
+
+
+def test_setup_archive_writes_playlist_and_remove_hotkey(
+    tmp_paths, fake_provider, monkeypatch
+) -> None:
+    """[3/4]: a playlist name + remove hotkey land in config so the
+    archive PostLikeAction AND the remove-without-like trigger both wire."""
+    monkeypatch.setattr("builtins.input", _scripted_input([
+        "abc123client",
+        "none",
+        "Discover Weekly Archive",  # [3/4] archive playlist name
+        "ctrl+shift+alt+e",         # [3/4] remove hotkey (override default)
+    ]))
+    monkeypatch.setattr(_common.sys, "platform", "linux")
+
+    rc = _common.do_setup(reauth=False)
+    assert rc == 0
+    cfg = _common.load_config()
+    assert cfg["actions"]["archive_remove"]["playlist_name"] == "Discover Weekly Archive"
+    assert cfg["actions"]["archive_remove"]["enabled"] is True
+    assert cfg["trigger"]["remove_hotkey"] == "ctrl+shift+alt+e"
+    # The same name drives the like-flow archive action.
+    assert _common.resolve_archive_playlist_name(cfg) == "Discover Weekly Archive"
+
+
+def test_setup_archive_blank_disables_previously_set_name(
+    tmp_paths, fake_provider, monkeypatch
+) -> None:
+    """Re-running and clearing the name must turn the feature off, not
+    leave a stale playlist silently configured."""
+    _common.save_config({
+        "actions": {"archive_remove": {"playlist_name": "Old", "enabled": True}},
+    })
+    monkeypatch.setattr("builtins.input", _scripted_input([
+        "abc123client",
+        "none",
+        "-",  # [3/4] archive — '-' turns it off (blank would KEEP it)
+    ]))
+    monkeypatch.setattr(_common.sys, "platform", "linux")
+
+    rc = _common.do_setup(reauth=False)
+    assert rc == 0
+    cfg = _common.load_config()
+    assert cfg["actions"]["archive_remove"]["enabled"] is False
+    assert _common.resolve_archive_playlist_name(cfg) == ""
+
+
+def test_setup_archive_overwrites_existing_name(
+    tmp_paths, fake_provider, monkeypatch
+) -> None:
+    """Typing a *different* name replaces the old one (the rename path) and
+    keeps the feature enabled — guards the one-line overwrite from refactors."""
+    _common.save_config({
+        "actions": {"archive_remove": {"playlist_name": "Old", "enabled": True}},
+    })
+    monkeypatch.setattr("builtins.input", _scripted_input([
+        "abc123client",
+        "none",
+        "New Archive",        # [3/4] archive — rename
+        "ctrl+shift+alt+q",   # [3/4] remove hotkey
+    ]))
+    monkeypatch.setattr(_common.sys, "platform", "linux")
+
+    rc = _common.do_setup(reauth=False)
+    assert rc == 0
+    cfg = _common.load_config()
+    assert cfg["actions"]["archive_remove"]["playlist_name"] == "New Archive"
+    assert cfg["actions"]["archive_remove"]["enabled"] is True
+    assert _common.resolve_archive_playlist_name(cfg) == "New Archive"
+
+
+def test_setup_archive_dash_when_nothing_configured_disables_cleanly(
+    tmp_paths, fake_provider, monkeypatch, capsys
+) -> None:
+    """'-' with no prior name is idempotent: feature stays off and the
+    message acknowledges the explicit off-switch rather than 'Skipped'."""
+    monkeypatch.setattr("builtins.input", _scripted_input([
+        "abc123client",
+        "none",
+        "-",  # [3/4] archive — explicit off with nothing set
+    ]))
+    monkeypatch.setattr(_common.sys, "platform", "linux")
+
+    rc = _common.do_setup(reauth=False)
+    assert rc == 0
+    cfg = _common.load_config()
+    assert cfg["actions"]["archive_remove"]["enabled"] is False
+    assert "playlist_name" not in cfg["actions"]["archive_remove"]
+    assert _common.resolve_archive_playlist_name(cfg) == ""
+    assert "Already disabled" in capsys.readouterr().out
 
 
 def test_setup_aborts_when_supabase_creds_blank(
@@ -188,6 +281,7 @@ def test_setup_sheets_branch_runs_google_oauth(
         "spreadsheet-id-xyz",
         "google-client.apps.googleusercontent.com",
         "google-secret",
+        "",  # [3/4] archive — skip
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
@@ -229,6 +323,7 @@ def test_setup_sheets_skips_google_oauth_when_refresh_token_present(
         "sheets",
         "spreadsheet-id-xyz",
         # NO client_id/secret prompts because refresh_token is present.
+        "",  # [3/4] archive — skip
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
@@ -310,6 +405,46 @@ def test_build_storage_missing_supabase_creds_returns_none(tmp_paths) -> None:
 
 def test_build_storage_missing_spreadsheet_id_returns_none(tmp_paths) -> None:
     assert _common.build_storage({"storage": {"backend": "sheets"}}) is None
+
+
+# ── archive name resolution + remove-pipeline builder (#43) ────────────
+
+
+def test_resolve_archive_name_reads_nested_key() -> None:
+    cfg = {"actions": {"archive_remove": {"playlist_name": "Arch"}}}
+    assert _common.resolve_archive_playlist_name(cfg) == "Arch"
+
+
+def test_resolve_archive_name_legacy_flat_key() -> None:
+    assert _common.resolve_archive_playlist_name({"archive_playlist_name": "Old"}) == "Old"
+
+
+def test_resolve_archive_name_honors_disabled_flag() -> None:
+    cfg = {"actions": {"archive_remove": {"playlist_name": "Arch", "enabled": False}}}
+    assert _common.resolve_archive_playlist_name(cfg) == ""
+
+
+def test_resolve_archive_name_empty_when_unset() -> None:
+    assert _common.resolve_archive_playlist_name({}) == ""
+
+
+def test_build_remove_pipeline_none_when_no_archive() -> None:
+    assert _common.build_remove_pipeline({}, object(), lambda *a, **k: None) is None
+
+
+def test_build_remove_pipeline_built_when_configured() -> None:
+    cfg = {"actions": {"archive_remove": {"playlist_name": "Arch"}}}
+    pipe = _common.build_remove_pipeline(cfg, object(), lambda *a, **k: None)
+    assert pipe is not None
+    assert pipe._playlist_name == "Arch"
+
+
+def test_resolve_remove_hotkey_default_and_override() -> None:
+    assert _common.resolve_remove_hotkey({}) == _common.DEFAULT_REMOVE_HOTKEY
+    assert (
+        _common.resolve_remove_hotkey({"trigger": {"remove_hotkey": "ctrl+x"}})
+        == "ctrl+x"
+    )
 
 
 # ── print_config_paths surfaces all three paths ────────────────────────
