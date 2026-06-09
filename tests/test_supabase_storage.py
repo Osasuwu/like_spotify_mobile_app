@@ -12,7 +12,10 @@ import pytest
 
 from like_spotify.core.errors import TransientError
 from like_spotify.core.types import CurrentTrack
-from like_spotify.extensions.supabase_storage import SupabaseStorage
+from like_spotify.extensions.supabase_storage import (
+    SupabaseStorage,
+    _normalize_base_url,
+)
 
 
 @dataclass
@@ -36,6 +39,44 @@ def test_constructor_rejects_empty_creds() -> None:
         SupabaseStorage(url="", anon_key="k")
     with pytest.raises(ValueError):
         SupabaseStorage(url="https://x.supabase.co", anon_key="")
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        "https://x.supabase.co",
+        "https://x.supabase.co/",
+        "https://x.supabase.co/rest/v1",
+        "https://x.supabase.co/rest/v1/",
+        "  https://x.supabase.co/rest/v1/  ",
+    ],
+)
+def test_normalize_base_url_strips_rest_v1(given: str) -> None:
+    # Whichever URL the dashboard hands the user, it must reduce to the
+    # project origin so `/rest/v1/...` is appended exactly once.
+    assert _normalize_base_url(given) == "https://x.supabase.co"
+
+
+@pytest.mark.asyncio
+async def test_rpc_url_not_doubled_when_user_pastes_rest_endpoint(monkeypatch) -> None:
+    """Regression: pasting the `/rest/v1/` endpoint used to produce
+    `.../rest/v1/rest/v1/rpc/...` → 404 PGRST125."""
+    captured: dict[str, Any] = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        return FakeResponse(status_code=200, text="1")
+
+    monkeypatch.setattr(
+        "like_spotify.extensions.supabase_storage.requests.post", fake_post
+    )
+
+    storage = SupabaseStorage(
+        url="https://x.supabase.co/rest/v1/", anon_key="k"
+    )
+    await storage.record_artist_track("user-1", "art-1", "trk-1")
+
+    assert captured["url"] == "https://x.supabase.co/rest/v1/rpc/record_artist_track"
 
 
 @pytest.mark.asyncio

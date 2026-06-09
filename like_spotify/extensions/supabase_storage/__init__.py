@@ -31,7 +31,7 @@ class SupabaseStorage(Storage):
     def __init__(self, url: str, anon_key: str, timeout: float = 5.0) -> None:
         if not url or not anon_key:
             raise ValueError("supabase url and anon_key are required")
-        self._url = url.rstrip("/")
+        self._url = _normalize_base_url(url)
         self._key = anon_key
         self._timeout = timeout
 
@@ -128,6 +128,24 @@ class SupabaseStorage(Storage):
         if not rows:
             return 0
         return int(rows[0].get("count", 0))
+
+
+def _normalize_base_url(url: str) -> str:
+    """Reduce any pasted Supabase URL to the project origin.
+
+    The dashboard shows two URLs: the project URL
+    (`https://<ref>.supabase.co`) and the REST endpoint
+    (`https://<ref>.supabase.co/rest/v1/`). Users paste either. Every
+    request builder here appends `/rest/v1/...`, so a base that already
+    carries `/rest/v1` would double the path and PostgREST returns
+    `404 PGRST125 "Invalid path specified in request URL"`. Strip a
+    trailing `/rest/v1` (and any surrounding slashes) so the suffix is
+    added exactly once.
+    """
+    base = url.strip().rstrip("/")
+    if base.endswith("/rest/v1"):
+        base = base[: -len("/rest/v1")].rstrip("/")
+    return base
 
 
 def _parse_count(body: str) -> int:
