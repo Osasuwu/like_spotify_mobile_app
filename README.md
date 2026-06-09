@@ -100,8 +100,17 @@ The wizard is re-runnable; existing tokens are kept unless you pass
 ```bash
 like-spotify            # Windows: tray host with the hotkey (default Ctrl+Shift+Alt+W)
 like-spotify like-once  # any OS: like the currently-playing track and exit
+like-spotify remove-once # any OS: remove the current track from the archive playlist (no like)
 like-spotify --config   # print config + token paths
 ```
+
+On Windows the tray host also binds a **second** global hotkey (default
+`Ctrl+Shift+Alt+Q`) that removes the currently-playing track from your
+Discover-Weekly archive playlist **without liking it** — for tracks you
+want gone but not in your Liked Songs. It's active only once you set an
+archive playlist name in `--setup`; if it collides with the like hotkey
+it's skipped. Audio feedback is audible through the default sound device
+and distinct per action (like / remove / error).
 
 **Single-file `.exe`** (for users without Python): build via
 `tools\build.bat` → `dist\LikeSpotify.exe`.
@@ -183,11 +192,13 @@ Android (Flutter + Kotlin)          Desktop (Python framework)
 | Setting | Android | Desktop |
 |---------|---------|---------|
 | Trigger pattern / hotkey | In-app UI | `~/.like_spotify/config.json` → `trigger.hotkey` (default `Ctrl+Shift+Alt+W`) |
+| Remove-from-archive hotkey | n/a (one trigger on headphones) | `~/.like_spotify/config.json` → `trigger.remove_hotkey` (default `Ctrl+Shift+Alt+Q`) |
+| Archive playlist name | In-app UI | `~/.like_spotify/config.json` → `actions.archive_remove.playlist_name` (blank = archive-remove disabled) |
 | Spotify client_id | `.env` (`SPOTIFY_CLIENT_ID`) | `like-spotify --setup` → `~/.like_spotify/config.json` |
 | Spotify tokens | `FlutterSecureStorage` | `~/.like_spotify/spotify_token.json` |
 | Storage backend | (Supabase only) | `~/.like_spotify/config.json` → `storage.backend` (`supabase` / `sheets` / `none`) |
 | Google Sheets tokens | n/a | `~/.like_spotify/google_token.json` (refreshed automatically) |
-| Archive / best-of / follow | In-app UI | `~/.like_spotify/config.json` → `actions.{archive_remove,promote_to_best_of,follow_artist}` |
+| Best-of / follow | In-app UI | `~/.like_spotify/config.json` → `actions.{promote_to_best_of,follow_artist}` |
 
 ## License
 

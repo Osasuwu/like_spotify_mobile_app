@@ -22,9 +22,6 @@ import time
 from pathlib import Path
 
 from like_spotify.core.pipeline import Pipeline
-from like_spotify.extensions.one_shot_cli_trigger import (
-    TRIGGER as make_one_shot_cli_trigger,
-)
 from like_spotify.extensions.tray_hotkey_trigger import (
     DEFAULT_HOTKEY,
     TRIGGER as make_tray_hotkey_trigger,
@@ -80,8 +77,12 @@ class TrayFeedback:
     def attach(self, icon) -> None:
         self._icon = icon
 
-    def __call__(self, success: bool, title: str, message: str) -> None:
-        threading.Thread(target=self._beep, args=(success,), daemon=True).start()
+    def __call__(
+        self, success: bool, title: str, message: str, *, kind: str = "like"
+    ) -> None:
+        threading.Thread(
+            target=self._beep, args=(success, kind), daemon=True
+        ).start()
         threading.Thread(target=self._flash, args=(success,), daemon=True).start()
         if self._icon is not None:
             try:
@@ -96,14 +97,27 @@ class TrayFeedback:
         time.sleep(0.4)
         self._icon.icon = self._icon_default
 
-    def _beep(self, success: bool) -> None:
+    def _beep(self, success: bool, kind: str) -> None:
+        """Audible confirmation through the default sound device.
+
+        Uses `MessageBeep` (plays a system event sound via the default
+        output) rather than `Beep` (a PC-speaker / system-timer tone that
+        is silent on most modern laptops — the root cause of "no sound").
+        Distinct tones per outcome so like / remove / error are
+        distinguishable without looking at the tray:
+
+            like   → MB_ICONASTERISK   (0x40)
+            remove → MB_ICONEXCLAMATION (0x30)
+            error  → MB_ICONHAND        (0x10)
+        """
         import winsound
 
-        if success:
-            winsound.Beep(880, 80)
-            winsound.Beep(1100, 80)
+        if not success:
+            winsound.MessageBeep(0x10)
+        elif kind == "remove":
+            winsound.MessageBeep(0x30)
         else:
-            winsound.Beep(300, 200)
+            winsound.MessageBeep(0x40)
 
     @property
     def default_icon(self):
@@ -159,10 +173,11 @@ def _msgbox(text: str, title: str = "Like Spotify", icon: int = 0x10) -> None:
     _common.msgbox(text, title)
 
 
-# ── like-once subcommand (Windows still supports it) ───────────────────
+# ── one-shot subcommands (Windows still supports them) ─────────────────
 
 
-def _run_like_once() -> int:
+def _resolved_provider_or_hint():
+    """(provider, None) when ready, else (None, exit_code) after a hint box."""
     cfg = _common.load_config()
     client_id = _common.resolve_client_id(cfg)
     if not client_id:
@@ -170,15 +185,21 @@ def _run_like_once() -> int:
             "Not configured. Run from a terminal:\n\n    like-spotify --setup\n",
             title="Like Spotify — setup required",
         )
-        return 2
-
+        return None, 2, cfg
     provider = _common.make_provider(client_id)
     if not provider.has_tokens:
         _msgbox(
             "Not authenticated. Run from a terminal:\n\n    like-spotify --setup\n",
             title="Like Spotify — auth required",
         )
-        return 2
+        return None, 2, cfg
+    return provider, None, cfg
+
+
+def _run_like_once() -> int:
+    provider, err, cfg = _resolved_provider_or_hint()
+    if provider is None:
+        return err
 
     feedback = CliFeedback()
     storage = _common.build_storage(cfg)
@@ -189,22 +210,24 @@ def _run_like_once() -> int:
         storage=storage,
         post_like_actions=post_actions,
     )
-    trigger = make_one_shot_cli_trigger()
+    return _common.run_one_shot(pipeline, feedback)
 
-    async def emit() -> None:
-        await pipeline.run_once()
 
-    async def run() -> None:
-        try:
-            await trigger.start(emit)
-        finally:
-            await trigger.stop()
+def _run_remove_once() -> int:
+    provider, err, cfg = _resolved_provider_or_hint()
+    if provider is None:
+        return err
 
-    asyncio.run(run())
-
-    if not feedback.calls:
-        return 1
-    return 0 if feedback.calls[-1][0] else 1
+    feedback = CliFeedback()
+    pipeline = _common.build_remove_pipeline(cfg, provider, feedback)
+    if pipeline is None:
+        _msgbox(
+            "No archive playlist configured. Run from a terminal:\n\n"
+            "    like-spotify --setup\n",
+            title="Like Spotify — setup required",
+        )
+        return 2
+    return _common.run_one_shot(pipeline, feedback)
 
 
 # ── Main ───────────────────────────────────────────────────────────────
@@ -219,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
         return _common.do_setup(reauth=args.reauth)
     if args.command == "like-once":
         return _run_like_once()
+    if args.command == "remove-once":
+        return _run_remove_once()
 
     cfg = _common.load_config()
     client_id = _common.resolve_client_id(cfg)
@@ -251,6 +276,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     trigger = make_tray_hotkey_trigger(hotkey=hotkey)
 
+    # ── Second hotkey: remove-without-like (only when an archive is set) ──
+    # Skip when no archive playlist is configured (nothing to remove from)
+    # or when the remove hotkey collides with the like hotkey — registering
+    # two handlers on one combo would fire both pipelines per press.
+    remove_hotkey = _common.resolve_remove_hotkey(cfg)
+    remove_pipeline = _common.build_remove_pipeline(cfg, provider, feedback)
+    remove_enabled = remove_pipeline is not None and remove_hotkey != hotkey
+    remove_trigger = (
+        make_tray_hotkey_trigger(hotkey=remove_hotkey) if remove_enabled else None
+    )
+
     loop = asyncio.new_event_loop()
     loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
     loop_thread.start()
@@ -258,7 +294,14 @@ def main(argv: list[str] | None = None) -> int:
     async def emit() -> None:
         await pipeline.run_once()
 
+    async def emit_remove() -> None:
+        await remove_pipeline.run_once()
+
     asyncio.run_coroutine_threadsafe(trigger.start(emit), loop).result()
+    if remove_trigger is not None:
+        asyncio.run_coroutine_threadsafe(
+            remove_trigger.start(emit_remove), loop
+        ).result()
 
     # Tray menu (runs on the calling thread — main).
     import pystray  # local import: heavy
@@ -266,15 +309,21 @@ def main(argv: list[str] | None = None) -> int:
     def on_like(_icon, _item):
         asyncio.run_coroutine_threadsafe(pipeline.run_once(), loop)
 
+    def on_remove(_icon, _item):
+        asyncio.run_coroutine_threadsafe(remove_pipeline.run_once(), loop)
+
     def on_toggle_autostart(icon, _item):
         _autostart_set(not _autostart_enabled())
         icon.update_menu()
 
     def on_quit(icon, _item):
-        try:
-            asyncio.run_coroutine_threadsafe(trigger.stop(), loop).result(timeout=2)
-        except Exception:
-            pass
+        for t in (trigger, remove_trigger):
+            if t is None:
+                continue
+            try:
+                asyncio.run_coroutine_threadsafe(t.stop(), loop).result(timeout=2)
+            except Exception:
+                pass
         loop.call_soon_threadsafe(loop.stop)
         icon.stop()
 
@@ -282,6 +331,14 @@ def main(argv: list[str] | None = None) -> int:
         pystray.MenuItem(
             f"Like current track  [{hotkey.upper()}]", on_like, default=True
         ),
+    ]
+    if remove_enabled:
+        menu_items.append(
+            pystray.MenuItem(
+                f"Remove from archive  [{remove_hotkey.upper()}]", on_remove
+            )
+        )
+    menu_items += [
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             "Start with Windows",
@@ -302,11 +359,11 @@ def main(argv: list[str] | None = None) -> int:
 
     def _startup_notify():
         time.sleep(0.5)
+        msg = f"Press {hotkey.upper()} to like the current track"
+        if remove_enabled:
+            msg += f"\n{remove_hotkey.upper()} removes it from the archive"
         try:
-            icon.notify(
-                f"Press {hotkey.upper()} to like the current track",
-                "Like Spotify",
-            )
+            icon.notify(msg, "Like Spotify")
         except Exception:
             pass
 

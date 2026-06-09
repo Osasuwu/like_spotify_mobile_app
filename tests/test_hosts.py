@@ -106,3 +106,14 @@ def test_cli_feedback_omits_dash_when_message_empty(capsys) -> None:
     fb(False, "Nothing playing", "")
     err = capsys.readouterr().err.strip()
     assert err == "[err] Nothing playing"
+
+
+def test_cli_feedback_accepts_kind_keyword(capsys) -> None:
+    """The remove pipeline calls feedback with kind="remove"; CLI has no
+    audio but must accept (and record) the keyword for parity."""
+    fb = _stub.CliFeedback()
+    fb(True, "Removed from Archive", "Song — Artist", kind="remove")
+    out = capsys.readouterr().out
+    assert "[ok] Removed from Archive — Song — Artist" in out
+    assert fb.calls == [(True, "Removed from Archive", "Song — Artist")]
+    assert fb.kinds == ["remove"]

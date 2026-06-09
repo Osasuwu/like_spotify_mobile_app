@@ -332,6 +332,18 @@ is populated by Storage *before* the post-chain runs — that's how
 
 Existing impls: `archive_remove`, `promote_to_best_of`, `follow_artist`.
 
+`archive_remove` reads its target playlist from
+`actions.archive_remove.playlist_name` in `config.json`; a blank name
+disables it (and `build_post_actions` drops the action). The same name
+feeds the standalone **remove-without-like** flow: `RemoveFromPlaylistPipeline`
+(in `core/pipeline.py`) removes the currently-playing track from that
+playlist *without* a like. The Windows tray host binds it to a second
+global hotkey, `trigger.remove_hotkey` (default `Ctrl+Shift+Alt+Q`), and
+every host exposes it as `like-spotify remove-once`. The hotkey is
+skipped if it equals `trigger.hotkey` or no archive name is configured.
+`resolve_archive_playlist_name` in `hosts/_common.py` is the single
+source of truth both flows read.
+
 **Provider-aware actions** downcast: if your action needs a
 Spotify-only API (e.g. playlist manipulation), check
 `isinstance(ctx.music_provider, SpotifyMusicProvider)` and use its

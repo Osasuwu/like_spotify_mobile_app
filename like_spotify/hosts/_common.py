@@ -16,6 +16,7 @@ Slice history:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -23,7 +24,11 @@ from pathlib import Path
 
 from like_spotify.auth import google as google_auth
 from like_spotify.core.actions import PostLikeAction
+from like_spotify.core.pipeline import FeedbackFn, RemoveFromPlaylistPipeline
 from like_spotify.core.storage import Storage
+from like_spotify.extensions.one_shot_cli_trigger import (
+    TRIGGER as make_one_shot_cli_trigger,
+)
 from like_spotify.extensions.archive_remove import (
     POST_LIKE_ACTION as make_archive_remove_action,
 )
@@ -39,6 +44,12 @@ from like_spotify.extensions.promote_to_best_of import (
 from like_spotify.extensions.spotify import MUSIC_PROVIDER as make_spotify_provider
 from like_spotify.extensions.supabase_storage import STORAGE as make_supabase_storage
 from like_spotify.extensions.tray_hotkey_trigger import DEFAULT_HOTKEY
+
+# Second hotkey: remove the current track from the archive playlist WITHOUT
+# liking it. Distinct from DEFAULT_HOTKEY (the like trigger). The desktop can
+# bind arbitrarily many triggers; headphones are limited to one media-button
+# pattern, so this is desktop-only by design.
+DEFAULT_REMOVE_HOTKEY = "ctrl+shift+alt+q"
 
 # ── Paths ──────────────────────────────────────────────────────────────
 
@@ -124,6 +135,30 @@ def build_storage(cfg: dict) -> Storage | None:
     return None
 
 
+def resolve_archive_playlist_name(cfg: dict) -> str:
+    """The configured Discover Weekly archive playlist name, or "".
+
+    Single source of truth for both the like-flow `ArchiveRemoveAction`
+    and the remove-without-like `RemoveFromPlaylistPipeline` — they curate
+    the *same* playlist, so they must read the same key. Honors the
+    `actions.archive_remove.enabled = false` opt-out (returns "" when off).
+    """
+    nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
+    archive_cfg = (
+        nested.get("archive_remove")
+        if isinstance(nested.get("archive_remove"), dict)
+        else {}
+    )
+    if not archive_cfg.get("enabled", True):
+        return ""
+    return (
+        archive_cfg.get("playlist_name")
+        or nested.get("archive_playlist_name")
+        or cfg.get("archive_playlist_name")  # legacy flat key
+        or ""
+    )
+
+
 def build_post_actions(
     cfg: dict, storage: Storage | None
 ) -> list[PostLikeAction]:
@@ -135,14 +170,8 @@ def build_post_actions(
     actions: list[PostLikeAction] = []
     nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
 
-    archive_cfg = nested.get("archive_remove") if isinstance(nested.get("archive_remove"), dict) else {}
-    archive_name = (
-        archive_cfg.get("playlist_name")
-        or nested.get("archive_playlist_name")
-        or cfg.get("archive_playlist_name")  # legacy flat key
-        or ""
-    )
-    if archive_name and archive_cfg.get("enabled", True):
+    archive_name = resolve_archive_playlist_name(cfg)
+    if archive_name:
         try:
             actions.append(make_archive_remove_action(playlist_name=archive_name))
         except Exception:
@@ -191,6 +220,58 @@ def resolve_client_id(cfg: dict) -> str:
 
 def make_provider(client_id: str):
     return make_spotify_provider(client_id=client_id, token_path=SPOTIFY_TOKEN_FILE)
+
+
+def resolve_remove_hotkey(cfg: dict) -> str:
+    return cfg.get("trigger", {}).get("remove_hotkey", DEFAULT_REMOVE_HOTKEY)
+
+
+def run_one_shot(pipeline, feedback) -> int:
+    """Drive a single pipeline pass via OneShotCliTrigger; return an exit code.
+
+    Shared by every host's `like-once` / `remove-once` subcommand: the
+    only thing that varies between them is which pipeline is built and how
+    config errors are surfaced (handled by the caller). Exit code follows
+    the pipeline's last feedback outcome — 0 on success, 1 on failure or
+    if nothing was emitted — so the command is scriptable.
+    """
+    trigger = make_one_shot_cli_trigger()
+
+    async def emit() -> None:
+        await pipeline.run_once()
+
+    async def run() -> None:
+        try:
+            await trigger.start(emit)
+        finally:
+            await trigger.stop()
+
+    asyncio.run(run())
+
+    if not getattr(feedback, "calls", None):
+        return 1
+    return 0 if feedback.calls[-1][0] else 1
+
+
+def build_remove_pipeline(
+    cfg: dict, provider, feedback: FeedbackFn
+) -> RemoveFromPlaylistPipeline | None:
+    """Build the remove-without-like pipeline, or None when not configured.
+
+    Wired only when an archive playlist name is set — without a target
+    playlist there's nothing to remove from, so the second hotkey stays
+    dark rather than failing on every press. Targets the same playlist as
+    the like-flow archive action (see `resolve_archive_playlist_name`).
+    """
+    archive_name = resolve_archive_playlist_name(cfg)
+    if not archive_name:
+        return None
+    try:
+        return RemoveFromPlaylistPipeline(
+            provider=provider, feedback=feedback, playlist_name=archive_name
+        )
+    except ValueError:
+        return None
 
 
 # ── Interactive setup ──────────────────────────────────────────────────
@@ -256,6 +337,7 @@ def do_setup(reauth: bool = False) -> int:
     try:
         _setup_spotify(cfg, reauth=reauth)
         _setup_storage(cfg, reauth=reauth)
+        _setup_archive(cfg)
         _setup_autostart()
     except _SetupAbort as e:
         print(f"Aborted: {e}", file=sys.stderr)
@@ -274,7 +356,7 @@ def do_setup(reauth: bool = False) -> int:
 
 
 def _setup_spotify(cfg: dict, *, reauth: bool) -> None:
-    print("\n[1/3] Spotify")
+    print("\n[1/4] Spotify")
     current_id = cfg.get("spotify", {}).get("client_id", "")
     client_id = _prompt_secret("  Client ID", current=current_id)
     if not client_id:
@@ -299,7 +381,7 @@ def _setup_spotify(cfg: dict, *, reauth: bool) -> None:
 
 
 def _setup_storage(cfg: dict, *, reauth: bool) -> None:
-    print("\n[2/3] Storage (counts likes across devices)")
+    print("\n[2/4] Storage (counts likes across devices)")
     current_backend = (cfg.get("storage", {}) or {}).get("backend", "")
     default = current_backend or "none"
     backend = _prompt_choice(
@@ -355,8 +437,58 @@ def _setup_storage(cfg: dict, *, reauth: bool) -> None:
         print("  ✓ Counter disabled — likes still work, no count tracking.")
 
 
+def _setup_archive(cfg: dict) -> None:
+    """Discover Weekly clean-up: archive playlist + remove-without-like hotkey.
+
+    Two coupled settings, one playlist:
+      - `actions.archive_remove.playlist_name` — when you like a track, it's
+        auto-removed from this "save-for-later" playlist (the like flow's
+        PostLikeAction).
+      - `trigger.remove_hotkey` — a second hotkey that removes the current
+        track from the *same* playlist WITHOUT liking it, for tracks you
+        want gone but not saved. Only meaningful when a playlist is set.
+
+    Empty input keeps the current value (the wizard's keep-on-blank idiom),
+    so re-running setup for an unrelated step won't clobber the archive.
+    Type `-` to turn the feature off; blank with nothing set = skip.
+    """
+    print("\n[3/4] Discover Weekly clean-up (optional)")
+    print(
+        "  Name a playlist (e.g. an archived copy of Discover Weekly) to "
+        "curate.\n"
+        "  Liking a track removes it from this playlist; a second hotkey "
+        "removes\n"
+        "  the current track WITHOUT liking it. Blank = skip, '-' = turn off."
+    )
+    current_name = resolve_archive_playlist_name(cfg)
+    if current_name:
+        print(f"  (currently: {current_name})")
+    playlist_name = _prompt("  Archive playlist name", default=current_name)
+    archive_cfg = cfg.setdefault("actions", {}).setdefault("archive_remove", {})
+
+    if playlist_name == "-" or not playlist_name:
+        # '-' disables an existing name; bare-blank with nothing set = skip.
+        if current_name:
+            archive_cfg["enabled"] = False
+            print("  ✓ Clean-up disabled.")
+        else:
+            print("  ✓ Skipped.")
+        return
+
+    archive_cfg["playlist_name"] = playlist_name
+    archive_cfg["enabled"] = True
+
+    current_hotkey = resolve_remove_hotkey(cfg)
+    remove_hotkey = _prompt(
+        "  Remove-without-like hotkey", default=current_hotkey or DEFAULT_REMOVE_HOTKEY
+    )
+    cfg.setdefault("trigger", {})["remove_hotkey"] = remove_hotkey
+    print(f"  ✓ Archive playlist: {playlist_name}")
+    print(f"  ✓ Remove hotkey: {remove_hotkey.upper()}")
+
+
 def _setup_autostart() -> None:
-    print("\n[3/3] Autostart")
+    print("\n[4/4] Autostart")
     if sys.platform != "win32":
         # Print instructions only — issue AC: no auto-config on mac/linux.
         if sys.platform == "darwin":
@@ -415,10 +547,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse the shared CLI surface.
 
     Subcommands:
-        (none)     — run the platform's default host (tray on Windows,
-                     CLI-only stub elsewhere).
-        like-once  — perform a single like and exit (uses OneShotCliTrigger,
-                     works on every platform).
+        (none)      — run the platform's default host (tray on Windows,
+                      CLI-only stub elsewhere).
+        like-once   — perform a single like and exit (uses OneShotCliTrigger,
+                      works on every platform).
+        remove-once — remove the currently-playing track from the archive
+                      playlist WITHOUT liking it, then exit.
 
     Flags (back-compat with the original tray launcher):
         --setup    — interactive Client ID + browser OAuth.
@@ -429,10 +563,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "command",
         nargs="?",
         default="run",
-        choices=["run", "like-once"],
+        choices=["run", "like-once", "remove-once"],
         help=(
             "run (default) — start the long-lived host (tray on Windows). "
-            "like-once — perform a single like and exit."
+            "like-once — perform a single like and exit. "
+            "remove-once — remove the current track from the archive "
+            "playlist without liking it."
         ),
     )
     p.add_argument("--setup", action="store_true", help="Interactive setup wizard.")
