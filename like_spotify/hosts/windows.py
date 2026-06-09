@@ -177,7 +177,9 @@ def _msgbox(text: str, title: str = "Like Spotify", icon: int = 0x10) -> None:
 
 
 def _resolved_provider_or_hint():
-    """(provider, None) when ready, else (None, exit_code) after a hint box."""
+    """(provider, None, cfg) when ready, else (None, exit_code, cfg) after a
+    hint box. Mirrors the `_stub.py` copy — cfg is returned either way so the
+    caller can build the pipeline without reloading config."""
     cfg = _common.load_config()
     client_id = _common.resolve_client_id(cfg)
     if not client_id:

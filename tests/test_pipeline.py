@@ -434,12 +434,14 @@ class FakeRemoveProvider(MusicProvider):
         get_raises: Exception | None = None,
         find_raises: Exception | None = None,
         remove_raises: Exception | None = None,
+        remove_raises_once: bool = False,
     ):
         self._track = track
         self._playlist_id = playlist_id
         self._get_raises = get_raises
         self._find_raises = find_raises
         self._remove_raises = remove_raises
+        self._remove_raises_once = remove_raises_once
         self.find_calls: list[str] = []
         self.remove_calls: list[tuple[str, str]] = []
 
@@ -467,7 +469,9 @@ class FakeRemoveProvider(MusicProvider):
         self, track_id: str, playlist_id: str
     ) -> None:
         self.remove_calls.append((track_id, playlist_id))
-        if self._remove_raises is not None:
+        if self._remove_raises is not None and (
+            not self._remove_raises_once or len(self.remove_calls) == 1
+        ):
             raise self._remove_raises
 
 
@@ -560,6 +564,31 @@ async def test_remove_pipeline_remove_failure_surfaces() -> None:
 
     assert fb.calls[0][:2] == (False, "Remove failed")
     assert "boom" in fb.calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_remove_pipeline_drops_cache_after_remove_failure() -> None:
+    """A remove failure (stale id — playlist deleted/renamed) must drop the
+    cached id so the next press re-resolves instead of failing forever."""
+    provider = FakeRemoveProvider(
+        track=_track("trk1"),
+        playlist_id="pl1",
+        remove_raises=RuntimeError("gone"),
+        remove_raises_once=True,
+    )
+    fb = Feedback()
+    pipe = RemoveFromPlaylistPipeline(
+        provider=provider, feedback=fb, playlist_name="My Archive"
+    )
+
+    await pipe.run_once()  # resolves pl1, remove raises → cache dropped
+    await pipe.run_once()  # re-resolves, then succeeds
+
+    # find called twice proves the cache was invalidated by the failure.
+    assert provider.find_calls == ["My Archive", "My Archive"]
+    assert provider.remove_calls == [("trk1", "pl1"), ("trk1", "pl1")]
+    assert fb.calls[0][:2] == (False, "Remove failed")
+    assert fb.calls[1][0] is True
 
 
 @pytest.mark.asyncio

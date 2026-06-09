@@ -211,6 +211,51 @@ def test_setup_archive_blank_disables_previously_set_name(
     assert _common.resolve_archive_playlist_name(cfg) == ""
 
 
+def test_setup_archive_overwrites_existing_name(
+    tmp_paths, fake_provider, monkeypatch
+) -> None:
+    """Typing a *different* name replaces the old one (the rename path) and
+    keeps the feature enabled — guards the one-line overwrite from refactors."""
+    _common.save_config({
+        "actions": {"archive_remove": {"playlist_name": "Old", "enabled": True}},
+    })
+    monkeypatch.setattr("builtins.input", _scripted_input([
+        "abc123client",
+        "none",
+        "New Archive",        # [3/4] archive — rename
+        "ctrl+shift+alt+q",   # [3/4] remove hotkey
+    ]))
+    monkeypatch.setattr(_common.sys, "platform", "linux")
+
+    rc = _common.do_setup(reauth=False)
+    assert rc == 0
+    cfg = _common.load_config()
+    assert cfg["actions"]["archive_remove"]["playlist_name"] == "New Archive"
+    assert cfg["actions"]["archive_remove"]["enabled"] is True
+    assert _common.resolve_archive_playlist_name(cfg) == "New Archive"
+
+
+def test_setup_archive_dash_when_nothing_configured_disables_cleanly(
+    tmp_paths, fake_provider, monkeypatch, capsys
+) -> None:
+    """'-' with no prior name is idempotent: feature stays off and the
+    message acknowledges the explicit off-switch rather than 'Skipped'."""
+    monkeypatch.setattr("builtins.input", _scripted_input([
+        "abc123client",
+        "none",
+        "-",  # [3/4] archive — explicit off with nothing set
+    ]))
+    monkeypatch.setattr(_common.sys, "platform", "linux")
+
+    rc = _common.do_setup(reauth=False)
+    assert rc == 0
+    cfg = _common.load_config()
+    assert cfg["actions"]["archive_remove"]["enabled"] is False
+    assert "playlist_name" not in cfg["actions"]["archive_remove"]
+    assert _common.resolve_archive_playlist_name(cfg) == ""
+    assert "Already disabled" in capsys.readouterr().out
+
+
 def test_setup_aborts_when_supabase_creds_blank(
     tmp_paths, fake_provider, monkeypatch, capsys
 ) -> None:

@@ -466,13 +466,17 @@ def _setup_archive(cfg: dict) -> None:
     playlist_name = _prompt("  Archive playlist name", default=current_name)
     archive_cfg = cfg.setdefault("actions", {}).setdefault("archive_remove", {})
 
-    if playlist_name == "-" or not playlist_name:
-        # '-' disables an existing name; bare-blank with nothing set = skip.
-        if current_name:
-            archive_cfg["enabled"] = False
-            print("  ✓ Clean-up disabled.")
-        else:
-            print("  ✓ Skipped.")
+    if playlist_name == "-":
+        # Explicit off switch — idempotent: works whether or not a name was
+        # set. The message reflects which it was so '-' never looks like a
+        # no-op when the user clearly asked to turn it off.
+        archive_cfg["enabled"] = False
+        print("  ✓ Clean-up disabled." if current_name else "  ✓ Already disabled.")
+        return
+    if not playlist_name:
+        # Bare Enter is only empty when nothing was configured (keep-on-blank
+        # would otherwise have returned current_name) — so this is a skip.
+        print("  ✓ Skipped.")
         return
 
     archive_cfg["playlist_name"] = playlist_name

@@ -1,16 +1,24 @@
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 from .actions import PostLikeAction, PreLikeAction
 from .music_provider import MusicProvider
 from .storage import Storage
 from .types import CurrentTrack, LikeContext
 
-# (success, title, message) plus an optional keyword `kind` that hosts use
-# to pick a distinct confirmation sound — "like" (default), "remove", or
-# whatever a future flow needs. Callers that don't care omit it; feedback
-# impls default it to "like", so the 3-arg call stays valid everywhere.
-FeedbackFn = Callable[..., None]
+
+class FeedbackFn(Protocol):
+    """(success, title, message) plus an optional keyword `kind` that hosts
+    use to pick a distinct confirmation sound — "like" (default), "remove",
+    or whatever a future flow needs. Callers that don't care omit `kind`;
+    feedback impls default it to "like", so the 3-arg call stays valid
+    everywhere. A Protocol (not `Callable[..., None]`) so mypy/pyright still
+    catch mismatched argument types at the call site."""
+
+    def __call__(
+        self, success: bool, title: str, message: str, *, kind: str = "like"
+    ) -> None: ...
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +146,10 @@ class RemoveFromPlaylistPipeline:
     extension import.
 
     The resolved playlist id is cached after the first successful lookup.
-    A miss (playlist not found, or a lookup error) is *not* cached, so a
-    later press re-resolves — useful in a long-lived tray when the user
-    creates the playlist after launch.
+    A miss (playlist not found, or a lookup error) is *not* cached, and a
+    cached id is dropped again if the remove call later fails (the playlist
+    may have been deleted/renamed) — so a later press re-resolves. Useful in
+    a long-lived tray when the user creates the playlist after launch.
 
     Slice: #43 (remove-without-like hotkey).
     """
@@ -201,6 +210,10 @@ class RemoveFromPlaylistPipeline:
         try:
             await remover(track.provider_track_id, self._playlist_id)
         except Exception as e:
+            # The cached id may be stale (playlist deleted/renamed since the
+            # last resolve) — drop it so the next press re-resolves instead
+            # of failing forever against a dead id.
+            self._playlist_id = None
             self._feedback(False, "Remove failed", str(e), kind="remove")
             return
 
