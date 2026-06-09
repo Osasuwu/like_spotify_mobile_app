@@ -391,6 +391,7 @@ def _setup_storage(cfg: dict, *, reauth: bool) -> None:
 
     if backend == "supabase":
         sb = cfg.setdefault("supabase", {})
+        print("    (project URL, e.g. https://<ref>.supabase.co — not the /rest/v1 endpoint)")
         sb["url"] = _prompt_secret("  Supabase URL", current=sb.get("url", ""))
         sb["anon_key"] = _prompt_secret(
             "  Supabase anon key", current=sb.get("anon_key", "")
