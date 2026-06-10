@@ -134,7 +134,14 @@ _AUTOSTART_NAME = "LikeSpotify"
 def _autostart_target() -> str:
     if getattr(sys, "frozen", False):
         return f'"{Path(sys.executable).resolve()}"'
-    return f'"{sys.executable}" -m like_spotify'
+    # Source / pipx install: launch through the interpreter that's running
+    # us (the pipx venv when installed that way). Prefer pythonw.exe so the
+    # tray app starts at login without a console window flashing on screen;
+    # fall back to python.exe if the GUI interpreter isn't present.
+    exe = Path(sys.executable)
+    pythonw = exe.with_name("pythonw.exe")
+    runner = pythonw if pythonw.exists() else exe
+    return f'"{runner}" -m like_spotify'
 
 
 def _autostart_enabled() -> bool:
