@@ -22,3 +22,30 @@ jobs:
       - run: flutter analyze
 
       - run: flutter test --coverage
+
+  pytest:
+    # Python desktop port under like_spotify/. Runs on windows-latest, not
+    # ubuntu: the host code (ctypes.windll single-instance guard, winreg
+    # autostart toggle, winsound feedback) only executes on Win32. On Linux
+    # those paths are reached only through monkeypatched test seams, so ubuntu
+    # would validate the test doubles rather than the shipped behaviour — and
+    # Win32 host code is exactly the regression surface this gate exists to
+    # cover (cf. PR #47). The desktop port is Windows-only (see pyproject
+    # classifiers), so CI runs on the platform it ships to.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - run: python -m pip install --upgrade pip
+
+      # Runtime deps (requests/keyboard/pystray/Pillow) come from the package;
+      # pyinstaller in the [dev] extra is a build-only tool, not needed here.
+      - run: pip install . pytest pytest-asyncio
+
+      - run: python -m pytest -q
