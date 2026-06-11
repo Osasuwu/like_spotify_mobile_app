@@ -459,14 +459,19 @@ def _run_resident_host() -> int:
         except Exception:
             pass
 
-    threading.Thread(target=_startup_notify, daemon=True).start()
-
     # Don't race the shell: at login the Run entry can fire before explorer
     # has built the notification area, and the icon add is then silently
     # dropped — process alive, no heart. Wait for the taskbar first.
-    if not _wait_for_shell():
-        _log("Shell_TrayWnd absent after 60s — adding tray icon anyway")
-    _log("shell ready — entering tray loop")
+    if _wait_for_shell():
+        _log("shell ready — entering tray loop")
+    else:
+        _log("Shell_TrayWnd absent after 60s — adding tray icon anyway, proceeding")
+
+    # Welcome balloon: its 0.5s delay is meant to land just after the icon
+    # appears, so start it only now. On a cold boot the shell wait above can
+    # run for seconds; firing earlier would call notify() before icon.run()
+    # exists, and the balloon would be silently dropped.
+    threading.Thread(target=_startup_notify, daemon=True).start()
     icon.run()
     return 0
 
