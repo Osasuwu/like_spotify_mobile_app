@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from like_spotify.hosts import _stub, select_host
+from like_spotify.hosts import _stub, select_host, windows
 
 
 # ── select_host() dispatch ─────────────────────────────────────────────
@@ -31,6 +31,68 @@ def test_select_host_picks_stub_off_win32(platform: str) -> None:
     with patch("like_spotify.hosts.sys.platform", platform):
         host = select_host()
     assert host.__module__ == "like_spotify.hosts._stub"
+
+
+# ── Windows resident-host startup: shell-readiness + logging ───────────
+#
+# The tray path itself needs a Win32 desktop (manual boundary), but the
+# two startup defenses added to fix login-time autostart races are pure
+# logic behind injectable seams, so they unit-test on any OS.
+
+
+def test_wait_for_shell_returns_at_once_when_taskbar_present(monkeypatch) -> None:
+    monkeypatch.setattr(windows, "_taskbar_present", lambda: True)
+    slept: list[float] = []
+    monkeypatch.setattr(windows.time, "sleep", lambda s: slept.append(s))
+
+    assert windows._wait_for_shell() is True
+    assert slept == []  # the common post-login case must not block
+
+
+def test_wait_for_shell_polls_until_taskbar_appears(monkeypatch) -> None:
+    states = iter([False, False, True])
+    monkeypatch.setattr(windows, "_taskbar_present", lambda: next(states))
+    slept: list[float] = []
+    monkeypatch.setattr(windows.time, "sleep", lambda s: slept.append(s))
+
+    assert windows._wait_for_shell(interval=0.01) is True
+    assert len(slept) == 2  # polled twice before the taskbar came up
+
+
+def test_wait_for_shell_times_out(monkeypatch) -> None:
+    monkeypatch.setattr(windows, "_taskbar_present", lambda: False)
+    monkeypatch.setattr(windows.time, "sleep", lambda s: None)
+
+    assert windows._wait_for_shell(timeout=0.0) is False
+
+
+def test_wait_for_shell_does_not_hang_when_probe_raises(monkeypatch) -> None:
+    def boom() -> bool:
+        raise OSError("no shell API")
+
+    monkeypatch.setattr(windows, "_taskbar_present", boom)
+    assert windows._wait_for_shell() is False
+
+
+def test_log_appends_line_to_config_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
+    )
+    windows._log("hello world")
+
+    log = tmp_path / "startup.log"
+    assert log.exists()
+    contents = log.read_text(encoding="utf-8")
+    assert "hello world" in contents
+    assert f"[pid {windows.os.getpid()}]" in contents
+
+
+def test_log_never_raises_on_bad_path(monkeypatch) -> None:
+    # A config dir that can't be created must not take the process down.
+    monkeypatch.setattr(
+        "like_spotify.hosts._common.CONFIG_FILE", windows.Path("\x00bad") / "c.json"
+    )
+    windows._log("should be swallowed")  # must not raise
 
 
 # ── Stub host: surface CLI failures cleanly ────────────────────────────
