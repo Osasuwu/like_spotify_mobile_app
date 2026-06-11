@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import os
 import sys
 import threading
 import time
@@ -239,6 +240,69 @@ def _run_remove_once() -> int:
     return _common.run_one_shot(pipeline, feedback)
 
 
+# ── Startup logging + shell-readiness ──────────────────────────────────
+#
+# The resident tray is launched at login by the HKCU\…\Run key through
+# pythonw.exe — no console, so a crash or a lost tray-icon add leaves no
+# trace and the heart silently never appears ("снова не запустилось").
+# Two coupled defenses:
+#   1. `_log` — append the launch context + any fatal traceback to a file,
+#      so the *next* failed boot is diagnosable by fact, not by guess.
+#   2. `_wait_for_shell` — at login the Run entry can fire before explorer
+#      has created the notification area (`Shell_TrayWnd`); adding the icon
+#      then is silently dropped. Block until the taskbar exists so we stop
+#      racing the shell. Post-login the window is already up → returns at
+#      once. The race is timing-dependent, which is why autostart works on
+#      one boot and not the next.
+
+
+def _log(msg: str) -> None:
+    """Append one timestamped line to `<config-dir>/startup.log` (best effort).
+
+    Path is derived from `_common.CONFIG_FILE` so tests that redirect the
+    config dir capture the log too, and so it sits next to config/tokens.
+    Never raises — logging must not be the thing that kills startup.
+    """
+    try:
+        log_file = _common.CONFIG_FILE.parent / "startup.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(f"{ts} [pid {os.getpid()}] {msg}\n")
+    except Exception:
+        pass
+
+
+def _taskbar_present() -> bool:
+    """True when the shell notification area window exists.
+
+    Injectable seam: `_wait_for_shell` is the loop worth testing, and it
+    polls through here so tests can drive readiness without a real desktop.
+    """
+    return bool(ctypes.windll.user32.FindWindowW("Shell_TrayWnd", None))
+
+
+def _wait_for_shell(timeout: float = 60.0, interval: float = 0.5) -> bool:
+    """Block until the taskbar exists, or `timeout` seconds pass.
+
+    Returns True if the shell came up in time, False on timeout (or if the
+    shell API is unavailable — then we don't block, just proceed). Polls
+    every `interval` seconds. Returns immediately when the taskbar is
+    already present (the normal post-login case).
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            if _taskbar_present():
+                return True
+        except Exception:
+            # No Win32 shell API (non-Windows / unusual host) — don't hang.
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+
+
 # ── Main ───────────────────────────────────────────────────────────────
 
 
@@ -254,6 +318,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "remove-once":
         return _run_remove_once()
 
+    # Resident tray host — the login-launched path. Log the launch context
+    # and funnel any startup crash to the log before pythonw lets it die
+    # silently (the whole reason "снова не запустилось" left no trace).
+    _log(
+        f"launch — cwd={os.getcwd()} exe={sys.executable!r} "
+        f"frozen={getattr(sys, 'frozen', False)} argv={sys.argv[1:]}"
+    )
+    try:
+        return _run_resident_host()
+    except SystemExit:
+        raise  # single-instance guard / normal exit — not a fault
+    except BaseException:
+        import traceback
+
+        _log("FATAL during resident host startup:\n" + traceback.format_exc())
+        raise
+
+
+def _run_resident_host() -> int:
     cfg = _common.load_config()
     client_id = _common.resolve_client_id(cfg)
     if not client_id:
@@ -376,8 +459,19 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
 
-    threading.Thread(target=_startup_notify, daemon=True).start()
+    # Don't race the shell: at login the Run entry can fire before explorer
+    # has built the notification area, and the icon add is then silently
+    # dropped — process alive, no heart. Wait for the taskbar first.
+    if _wait_for_shell():
+        _log("shell ready — entering tray loop")
+    else:
+        _log("Shell_TrayWnd absent after 60s — adding tray icon anyway, proceeding")
 
+    # Welcome balloon: its 0.5s delay is meant to land just after the icon
+    # appears, so start it only now. On a cold boot the shell wait above can
+    # run for seconds; firing earlier would call notify() before icon.run()
+    # exists, and the balloon would be silently dropped.
+    threading.Thread(target=_startup_notify, daemon=True).start()
     icon.run()
     return 0
 
