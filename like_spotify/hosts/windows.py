@@ -132,17 +132,67 @@ _AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _AUTOSTART_NAME = "LikeSpotify"
 
 
-def _autostart_target() -> str:
+def _resident_launch_command() -> str:
+    """The bare command that starts the resident tray (interpreter + module).
+
+    Prefers `pythonw.exe` so no console attaches in the common case; falls
+    back to `python.exe` when the GUI interpreter isn't beside it. The
+    autostart path wraps this again to stay hidden even when the venv
+    redirector re-execs the console interpreter at login — see
+    `_autostart_target`.
+    """
     if getattr(sys, "frozen", False):
         return f'"{Path(sys.executable).resolve()}"'
-    # Source / pipx install: launch through the interpreter that's running
-    # us (the pipx venv when installed that way). Prefer pythonw.exe so the
-    # tray app starts at login without a console window flashing on screen;
-    # fall back to python.exe if the GUI interpreter isn't present.
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe")
     runner = pythonw if pythonw.exists() else exe
     return f'"{runner}" -m like_spotify'
+
+
+def _autostart_vbs_path() -> Path:
+    """Where the hidden-launch VBScript lives — next to config/tokens."""
+    return _common.CONFIG_FILE.parent / "autostart_hidden.vbs"
+
+
+def _write_autostart_vbs() -> Path:
+    """Write a VBScript that launches the tray with a hidden window.
+
+    Why this exists: at login the pipx / pythoncore venv `pythonw.exe` is a
+    redirector that re-execs the *console* `python.exe` (confirmed in
+    startup.log — every real login logged `exe=…python.exe`), so a console
+    window appears despite Run pointing at `pythonw.exe`. The `pythonw`
+    preference alone can't win against the redirector's interpreter choice.
+
+    `WScript.Shell.Run(cmd, 0, False)` starts the process with `SW_HIDE`,
+    which the redirector forwards to the real interpreter — no console, no
+    flash. Only the autostart path goes through this; running `like-spotify`
+    from a terminal is unaffected (it never touches the VBScript).
+    """
+    cmd = _resident_launch_command()
+    # VBScript string literals escape a double-quote by doubling it.
+    arg = '"' + cmd.replace('"', '""') + '"'
+    vbs = (
+        'Set sh = CreateObject("WScript.Shell")\r\n'
+        f"sh.Run {arg}, 0, False\r\n"
+    )
+    path = _autostart_vbs_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(vbs, encoding="utf-8")
+    return path
+
+
+def _autostart_target() -> str:
+    """Registry Run value: launch the tray fully hidden at login.
+
+    A frozen windowed exe has no console, so it's launched directly. For the
+    source / pipx install we route through `wscript.exe` + a hidden-launch
+    VBScript so the console interpreter the venv redirector picks at login
+    never shows a window.
+    """
+    if getattr(sys, "frozen", False):
+        return _resident_launch_command()
+    vbs = _write_autostart_vbs()
+    return f'wscript.exe //B //Nologo "{vbs}"'
 
 
 def _autostart_enabled() -> bool:
@@ -282,6 +332,24 @@ def _taskbar_present() -> bool:
     return bool(ctypes.windll.user32.FindWindowW("Shell_TrayWnd", None))
 
 
+def _console_state() -> str:
+    """Describe this process's console window for the launch log.
+
+    The autostart fix hinges on *not* getting a visible console at login
+    (the pipx/pythoncore venv redirector re-execs the console interpreter —
+    see `_write_autostart_vbs`). Recording the console HWND and its
+    visibility makes the fix self-verifying: `hwnd=0` means a windowed
+    interpreter (ideal), `visible=False` means a console exists but is
+    hidden (the VBScript did its job). Best effort — never raises.
+    """
+    try:
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        visible = bool(hwnd) and bool(ctypes.windll.user32.IsWindowVisible(hwnd))
+        return f"console_hwnd={hwnd} console_visible={visible}"
+    except Exception:
+        return "console_hwnd=? console_visible=?"
+
+
 def _wait_for_shell(timeout: float = 60.0, interval: float = 0.5) -> bool:
     """Block until the taskbar exists, or `timeout` seconds pass.
 
@@ -323,7 +391,8 @@ def main(argv: list[str] | None = None) -> int:
     # silently (the whole reason "снова не запустилось" left no trace).
     _log(
         f"launch — cwd={os.getcwd()} exe={sys.executable!r} "
-        f"frozen={getattr(sys, 'frozen', False)} argv={sys.argv[1:]}"
+        f"frozen={getattr(sys, 'frozen', False)} argv={sys.argv[1:]} "
+        f"{_console_state()}"
     )
     try:
         return _run_resident_host()

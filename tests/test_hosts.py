@@ -95,6 +95,65 @@ def test_log_never_raises_on_bad_path(monkeypatch) -> None:
     windows._log("should be swallowed")  # must not raise
 
 
+# ── Autostart hidden-launch wrapper ────────────────────────────────────
+#
+# At login the pipx/pythoncore venv `pythonw.exe` redirector re-execs the
+# *console* `python.exe`, so a console window appears despite Run pointing
+# at pythonw. The fix routes autostart through `wscript.exe` + a hidden
+# VBScript (`SW_HIDE`). The wrapper + quote escaping are pure logic.
+
+
+def test_write_autostart_vbs_emits_hidden_run(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
+    )
+    monkeypatch.setattr(
+        windows, "_resident_launch_command", lambda: '"C:\\py\\pythonw.exe" -m like_spotify'
+    )
+
+    path = windows._write_autostart_vbs()
+
+    assert path == tmp_path / "autostart_hidden.vbs"
+    vbs = path.read_text(encoding="utf-8")
+    assert "WScript.Shell" in vbs
+    # SW_HIDE (window style 0), non-blocking — this is what kills the console.
+    assert ", 0, False" in vbs
+    # Inner double-quotes must be VBScript-escaped (doubled) so the path
+    # with spaces survives.
+    assert '"""C:\\py\\pythonw.exe"" -m like_spotify"' in vbs
+
+
+def test_autostart_target_routes_through_wscript(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
+    )
+    monkeypatch.setattr(windows.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(
+        windows, "_resident_launch_command", lambda: '"py.exe" -m like_spotify'
+    )
+
+    target = windows._autostart_target()
+
+    assert target.startswith("wscript.exe //B //Nologo ")
+    assert "autostart_hidden.vbs" in target
+    # The VBScript is written as a side effect so the Run value points at a
+    # real file.
+    assert (tmp_path / "autostart_hidden.vbs").exists()
+
+
+def test_autostart_target_frozen_launches_exe_directly(monkeypatch) -> None:
+    # A frozen windowed exe has no console — no VBScript indirection needed.
+    monkeypatch.setattr(windows.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        windows.sys, "executable", "C:\\app\\LikeSpotify.exe", raising=False
+    )
+
+    target = windows._autostart_target()
+
+    assert "wscript" not in target
+    assert "LikeSpotify.exe" in target
+
+
 # ── Stub host: surface CLI failures cleanly ────────────────────────────
 
 
