@@ -70,4 +70,33 @@ void main() {
       expect(await repo.getArtistLikeCount('same-id'), 1);
     });
   });
+
+  group('bulk enumeration', () {
+    test('loadAllTrackLikeCounts returns empty map when nothing stored', () async {
+      expect(await repo.loadAllTrackLikeCounts(), <String, int>{});
+    });
+
+    test('loadAllTrackLikeCounts returns every stored track count', () async {
+      await repo.incrementTrackLikeCount('track-a');
+      await repo.incrementTrackLikeCount('track-a');
+      await repo.incrementTrackLikeCount('track-b');
+
+      expect(await repo.loadAllTrackLikeCounts(), <String, int>{
+        'track-a': 2,
+        'track-b': 1,
+      });
+    });
+
+    test('loadAllArtistLikeCounts returns every stored artist count', () async {
+      await repo.incrementArtistLikeCount('artist-a');
+      await repo.incrementArtistLikeCount('artist-b');
+      await repo.incrementArtistLikeCount('artist-b');
+      await repo.incrementArtistLikeCount('artist-b');
+
+      expect(await repo.loadAllArtistLikeCounts(), <String, int>{
+        'artist-a': 1,
+        'artist-b': 3,
+      });
+    });
+  });
 }

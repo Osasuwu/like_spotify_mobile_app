@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../core/app_constants.dart';
 import '../../data/spotify/spotify_client.dart';
@@ -377,6 +381,66 @@ class AppController extends StateNotifier<AppState> {
   Future<void> clearLogs() async {
     await _settingsRepository.clearLogs();
     state = state.copyWith(logs: <AppLog>[]);
+  }
+
+  Future<void> exportDiagnostics() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      final likeCounts = await _musicServiceRepository.loadAllLikeCounts();
+
+      final bundle = <String, dynamic>{
+        'exportedAt': DateTime.now().toUtc().toIso8601String(),
+        'app': <String, dynamic>{
+          'packageName': packageInfo.packageName,
+          'version': packageInfo.version,
+          'buildNumber': packageInfo.buildNumber,
+        },
+        'device': <String, dynamic>{
+          'manufacturer': androidInfo.manufacturer,
+          'model': androidInfo.model,
+          'androidRelease': androidInfo.version.release,
+          'sdkInt': androidInfo.version.sdkInt,
+        },
+        'service': <String, dynamic>{
+          'enabled': state.serviceEnabled,
+          'isMiui': state.isMiui,
+          'batteryOptimized': state.batteryOptimized,
+          'notificationListenerEnabled': state.notificationListenerEnabled,
+          'spotifyInstalled': state.spotifyInstalled,
+        },
+        // Only non-secret auth fields — never export accessToken/refreshToken.
+        'auth': <String, dynamic>{
+          'connected': state.authState.connected,
+          'isExpired': state.authState.isExpired,
+        },
+        'triggerConfig': <String, dynamic>{
+          'pattern': state.triggerConfig.pattern,
+          'windowMs': state.triggerConfig.windowMs,
+          'debounceMs': state.triggerConfig.debounceMs,
+        },
+        'ruleConfig': state.ruleConfig.toJson(),
+        'likeCounts': likeCounts,
+        'logs': state.logs.map((log) => log.toJson()).toList(),
+      };
+
+      final jsonText = const JsonEncoder.withIndent('  ').convert(bundle);
+      await SharePlus.instance.share(
+        ShareParams(text: jsonText, subject: 'Like Spotify diagnostics export'),
+      );
+      await addLog(
+        actionType: 'export_diagnostics',
+        result: LogResult.success,
+        message: 'Exported diagnostics bundle (${state.logs.length} log entries)',
+      );
+    } catch (error) {
+      state = state.copyWith(lastError: error.toString());
+      await addLog(
+        actionType: 'export_diagnostics',
+        result: LogResult.failure,
+        message: 'Diagnostics export failed: $error',
+      );
+    }
   }
 
   Future<void> addLog({

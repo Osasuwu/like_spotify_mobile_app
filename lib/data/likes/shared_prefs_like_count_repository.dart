@@ -24,6 +24,12 @@ class SharedPrefsLikeCountRepository implements LikeCountRepository {
   Future<int> getArtistLikeCount(String artistId) =>
       _getCount(_keyArtistCounts, artistId);
 
+  @override
+  Future<Map<String, int>> loadAllTrackLikeCounts() => _loadMap(_keyTrackCounts);
+
+  @override
+  Future<Map<String, int>> loadAllArtistLikeCounts() => _loadMap(_keyArtistCounts);
+
   Future<int> _increment(String key, String itemId) async {
     final map = await _loadMap(key);
     final next = (map[itemId] ?? 0) + 1;
