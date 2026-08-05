@@ -132,8 +132,11 @@ class MediaButtonForegroundService : Service() {
         return raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }
     }
 
-    private fun log(message: String) {
-        val intent = Intent(AppConstants.ACTION_LOG_EVENT).putExtra(AppConstants.EXTRA_LOG, message)
+    private fun log(message: String, actionType: String = "media_event", result: String = "info") {
+        val intent = Intent(AppConstants.ACTION_LOG_EVENT)
+            .putExtra(AppConstants.EXTRA_LOG, message)
+            .putExtra(AppConstants.EXTRA_LOG_ACTION_TYPE, actionType)
+            .putExtra(AppConstants.EXTRA_LOG_RESULT, result)
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
 

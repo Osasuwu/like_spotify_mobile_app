@@ -1,3 +1,4 @@
+import '../entities/app_log.dart';
 import '../entities/pending_like.dart';
 import '../entities/rule_config.dart';
 import '../entities/trigger_config.dart';
@@ -9,8 +10,8 @@ abstract class SettingsRepository {
   Future<void> saveRuleConfig(RuleConfig config);
   Future<bool> loadServiceEnabled();
   Future<void> saveServiceEnabled(bool enabled);
-  Future<List<String>> loadLogs();
-  Future<void> appendLog(String message);
+  Future<List<AppLog>> loadLogs();
+  Future<void> appendLog(AppLog log);
   Future<void> clearLogs();
   Future<List<PendingLike>> loadPendingLikes();
   Future<void> savePendingLikes(List<PendingLike> likes);

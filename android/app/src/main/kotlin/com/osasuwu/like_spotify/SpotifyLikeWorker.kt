@@ -39,7 +39,7 @@ class SpotifyLikeWorker(
         val clientId = prefs.getString(AppConstants.KEY_SPOTIFY_CLIENT_ID, null)
 
         if (accessToken.isNullOrBlank()) {
-            log("Like skipped: Spotify access token missing")
+            log("Like skipped: Spotify access token missing", actionType = "like_track", result = "failure")
             playFeedbackTone(success = false)
             return Result.success()
         }
@@ -79,7 +79,7 @@ class SpotifyLikeWorker(
         }
 
         if (track == null) {
-            log("Like skipped: no currently playing track")
+            log("Like skipped: no currently playing track", actionType = "like_track", result = "failure")
             playFeedbackTone(success = false)
             return Result.success()
         }
@@ -91,13 +91,19 @@ class SpotifyLikeWorker(
         }
 
         // Like the track
-        val liked = likeTrack(track.id, token)
-        playFeedbackTone(success = liked)
-        if (!liked) {
-            log("Like failed for track: ${track.id}")
+        val likeResult = likeTrack(track.id, token)
+        playFeedbackTone(success = likeResult.success)
+        if (!likeResult.success) {
+            log(
+                "Like failed for track: ${track.id}",
+                actionType = "like_track",
+                targetId = track.id,
+                result = "failure",
+                httpCode = likeResult.statusCode
+            )
             return Result.success()
         }
-        log("Liked track: ${track.id}")
+        log("Liked track: ${track.id}", actionType = "like_track", targetId = track.id, result = "success", httpCode = likeResult.statusCode)
 
         runRulePipeline(prefs, token, track)
 
@@ -110,10 +116,34 @@ class SpotifyLikeWorker(
         if (ruleConfig.archiveRemoveEnabled) {
             runCatching {
                 val archiveId = findPlaylistByName(prefs, ruleConfig.archivePlaylistName, token)
-                if (archiveId != null && removeTrackFromPlaylist(archiveId, track.uri, token)) {
-                    log("Removed from archive playlist: ${ruleConfig.archivePlaylistName}")
+                if (archiveId != null) {
+                    val result = removeTrackFromPlaylist(archiveId, track.uri, token)
+                    if (result.success) {
+                        log(
+                            "Removed from archive playlist: ${ruleConfig.archivePlaylistName}",
+                            actionType = "archive_remove",
+                            targetId = track.id,
+                            result = "success",
+                            httpCode = result.statusCode
+                        )
+                    } else {
+                        log(
+                            "Archive removal failed",
+                            actionType = "archive_remove",
+                            targetId = track.id,
+                            result = "failure",
+                            httpCode = result.statusCode
+                        )
+                    }
                 }
-            }.onFailure { log("Archive removal failed: ${it.message}") }
+            }.onFailure {
+                log(
+                    "Archive removal failed: ${it.message}",
+                    actionType = "archive_remove",
+                    targetId = track.id,
+                    result = "failure"
+                )
+            }
         }
 
         val trackCount = runCatching { incrementTrackLikeCount(prefs, track.id) }
@@ -121,20 +151,66 @@ class SpotifyLikeWorker(
         if (ruleConfig.bestOfEnabled && trackCount == ruleConfig.bestOfThreshold) {
             runCatching {
                 val bestOfId = ensurePlaylist(prefs, ruleConfig.bestOfPlaylistName, token)
-                if (bestOfId != null && addTrackToPlaylist(bestOfId, track.uri, token)) {
-                    log("Added to best-of playlist: ${ruleConfig.bestOfPlaylistName}")
+                if (bestOfId != null) {
+                    val result = addTrackToPlaylist(bestOfId, track.uri, token)
+                    if (result.success) {
+                        log(
+                            "Added to best-of playlist: ${ruleConfig.bestOfPlaylistName}",
+                            actionType = "best_of_add",
+                            targetId = track.id,
+                            result = "success",
+                            httpCode = result.statusCode
+                        )
+                    } else {
+                        log(
+                            "Best-of promotion failed",
+                            actionType = "best_of_add",
+                            targetId = track.id,
+                            result = "failure",
+                            httpCode = result.statusCode
+                        )
+                    }
                 }
-            }.onFailure { log("Best-of promotion failed: ${it.message}") }
+            }.onFailure {
+                log(
+                    "Best-of promotion failed: ${it.message}",
+                    actionType = "best_of_add",
+                    targetId = track.id,
+                    result = "failure"
+                )
+            }
         }
 
         val artistId = track.artistId ?: return
         val artistCount = incrementLocalCount(prefs, AppConstants.KEY_ARTIST_LIKE_COUNTS, artistId)
         if (ruleConfig.followArtistEnabled && artistCount == ruleConfig.followArtistThreshold) {
             runCatching {
-                if (followArtist(artistId, token)) {
-                    log("Auto-followed artist: $artistId")
+                val result = followArtist(artistId, token)
+                if (result.success) {
+                    log(
+                        "Auto-followed artist: $artistId",
+                        actionType = "follow_artist",
+                        targetId = artistId,
+                        result = "success",
+                        httpCode = result.statusCode
+                    )
+                } else {
+                    log(
+                        "Follow artist failed",
+                        actionType = "follow_artist",
+                        targetId = artistId,
+                        result = "failure",
+                        httpCode = result.statusCode
+                    )
                 }
-            }.onFailure { log("Follow artist failed: ${it.message}") }
+            }.onFailure {
+                log(
+                    "Follow artist failed: ${it.message}",
+                    actionType = "follow_artist",
+                    targetId = artistId,
+                    result = "failure"
+                )
+            }
         }
     }
 
@@ -305,23 +381,26 @@ class SpotifyLikeWorker(
         return id
     }
 
-    private fun addTrackToPlaylist(playlistId: String, trackUri: String, token: String): Boolean {
+    private fun addTrackToPlaylist(playlistId: String, trackUri: String, token: String): ApiResult {
         val body = JSONObject().put("uris", JSONArray().put(trackUri)).toString()
         val connection = apiWithBody("https://api.spotify.com/v1/playlists/$playlistId/tracks", token, "POST", body)
-        return connection.responseCode in 200..299
+        val code = connection.responseCode
+        return ApiResult(code in 200..299, code)
     }
 
-    private fun removeTrackFromPlaylist(playlistId: String, trackUri: String, token: String): Boolean {
+    private fun removeTrackFromPlaylist(playlistId: String, trackUri: String, token: String): ApiResult {
         val track = JSONObject().put("uri", trackUri)
         val body = JSONObject().put("tracks", JSONArray().put(track)).toString()
         val connection = apiWithBody("https://api.spotify.com/v1/playlists/$playlistId/tracks", token, "DELETE", body)
-        return connection.responseCode in 200..299
+        val code = connection.responseCode
+        return ApiResult(code in 200..299, code)
     }
 
-    private fun followArtist(artistId: String, token: String): Boolean {
+    private fun followArtist(artistId: String, token: String): ApiResult {
         val encoded = URLEncoder.encode(artistId, Charsets.UTF_8.name())
         val connection = api("https://api.spotify.com/v1/me/following?type=artist&ids=$encoded", token, "PUT")
-        return connection.responseCode in 200..299
+        val code = connection.responseCode
+        return ApiResult(code in 200..299, code)
     }
 
     // ---- Core like + track lookup -------------------------------------------------
@@ -340,11 +419,12 @@ class SpotifyLikeWorker(
         return CurrentTrack(id = id, uri = uri, artistId = artistId)
     }
 
-    private fun likeTrack(trackId: String, token: String?): Boolean {
-        if (token.isNullOrBlank()) return false
+    private fun likeTrack(trackId: String, token: String?): ApiResult {
+        if (token.isNullOrBlank()) return ApiResult(false, 0)
         val encodedTrackId = URLEncoder.encode(trackId, Charsets.UTF_8.name())
         val connection = api("https://api.spotify.com/v1/me/tracks?ids=$encodedTrackId", token, "PUT")
-        return connection.responseCode in 200..299
+        val code = connection.responseCode
+        return ApiResult(code in 200..299, code)
     }
 
     private fun refreshAccessToken(refreshToken: String, clientId: String): RefreshedToken? {
@@ -411,13 +491,25 @@ class SpotifyLikeWorker(
         FeedbackPlayer.play(applicationContext, success)
     }
 
-    private fun log(message: String) {
+    private fun log(
+        message: String,
+        actionType: String = "native",
+        targetId: String? = null,
+        result: String = "info",
+        httpCode: Int? = null
+    ) {
         val intent = android.content.Intent(AppConstants.ACTION_LOG_EVENT)
             .putExtra(AppConstants.EXTRA_LOG, message)
+            .putExtra(AppConstants.EXTRA_LOG_ACTION_TYPE, actionType)
+            .putExtra(AppConstants.EXTRA_LOG_RESULT, result)
+        if (targetId != null) intent.putExtra(AppConstants.EXTRA_LOG_TARGET_ID, targetId)
+        if (httpCode != null) intent.putExtra(AppConstants.EXTRA_LOG_HTTP_CODE, httpCode)
         androidx.localbroadcastmanager.content.LocalBroadcastManager
             .getInstance(applicationContext)
             .sendBroadcast(intent)
     }
+
+    private data class ApiResult(val success: Boolean, val statusCode: Int)
 
     private data class CurrentTrack(
         val id: String,
