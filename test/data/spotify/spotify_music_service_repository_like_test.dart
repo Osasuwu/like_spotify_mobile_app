@@ -6,6 +6,7 @@ import 'package:like_spotify_mobile_app/data/spotify/spotify_models.dart'
 import 'package:like_spotify_mobile_app/data/spotify/spotify_music_service_repository.dart';
 import 'package:like_spotify_mobile_app/data/spotify/spotify_token_store.dart';
 import 'package:like_spotify_mobile_app/domain/entities/pending_like.dart';
+import 'package:like_spotify_mobile_app/domain/entities/rule_config.dart';
 import 'package:like_spotify_mobile_app/domain/entities/track_info.dart';
 import 'package:like_spotify_mobile_app/domain/repositories/like_count_repository.dart';
 import 'package:like_spotify_mobile_app/domain/repositories/platform_service_repository.dart';
@@ -63,11 +64,19 @@ void main() {
       (_) async => (DateTime.now().toUtc().add(const Duration(hours: 1)).millisecondsSinceEpoch ~/ 1000),
     );
 
-    // Default settings stubs
-    when(() => mockSettings.loadArchivePlaylistName())
-        .thenAnswer((_) async => '');
-    when(() => mockSettings.loadBestOfPlaylistName())
-        .thenAnswer((_) async => '');
+    // Default settings stubs: rules enabled but playlist names empty,
+    // matching the original "not configured" default behaviour.
+    when(() => mockSettings.loadRuleConfig()).thenAnswer(
+      (_) async => const RuleConfig(
+        archiveRemoveEnabled: true,
+        archivePlaylistName: '',
+        bestOfEnabled: true,
+        bestOfPlaylistName: '',
+        bestOfThreshold: 3,
+        followArtistEnabled: true,
+        followArtistThreshold: 5,
+      ),
+    );
   });
 
   group('likeTrack', () {
@@ -103,8 +112,17 @@ void main() {
           .thenAnswer((_) async => 3);
       when(() => mockLikeCount.incrementArtistLikeCount(any()))
           .thenAnswer((_) async => 1);
-      when(() => mockSettings.loadBestOfPlaylistName())
-          .thenAnswer((_) async => 'Best Of');
+      when(() => mockSettings.loadRuleConfig()).thenAnswer(
+        (_) async => const RuleConfig(
+          archiveRemoveEnabled: true,
+          archivePlaylistName: '',
+          bestOfEnabled: true,
+          bestOfPlaylistName: 'Best Of',
+          bestOfThreshold: 3,
+          followArtistEnabled: true,
+          followArtistThreshold: 5,
+        ),
+      );
       when(() => mockClient.getUserPlaylists(any(), offset: 0)).thenAnswer(
         (_) async => const models.SpotifyPlaylistPage(
           items: [models.SpotifyPlaylistItem(id: 'bestof-id', name: 'Best Of')],
@@ -176,8 +194,17 @@ void main() {
           .thenAnswer((_) async => 1);
       when(() => mockLikeCount.incrementArtistLikeCount(any()))
           .thenAnswer((_) async => 1);
-      when(() => mockSettings.loadArchivePlaylistName())
-          .thenAnswer((_) async => 'Discover Weekly Archive');
+      when(() => mockSettings.loadRuleConfig()).thenAnswer(
+        (_) async => const RuleConfig(
+          archiveRemoveEnabled: true,
+          archivePlaylistName: 'Discover Weekly Archive',
+          bestOfEnabled: true,
+          bestOfPlaylistName: '',
+          bestOfThreshold: 3,
+          followArtistEnabled: true,
+          followArtistThreshold: 5,
+        ),
+      );
       when(() => mockClient.getUserPlaylists(any(), offset: 0)).thenAnswer(
         (_) async => const models.SpotifyPlaylistPage(
           items: [

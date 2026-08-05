@@ -1,5 +1,6 @@
 import '../../domain/entities/app_log.dart';
 import '../../domain/entities/like_result.dart';
+import '../../domain/entities/rule_config.dart';
 import '../../domain/entities/spotify_auth_state.dart';
 import '../../domain/entities/trigger_config.dart';
 
@@ -12,8 +13,7 @@ class AppState {
   final bool spotifyInstalled;
   final SpotifyAuthState authState;
   final TriggerConfig triggerConfig;
-  final String archivePlaylistName;
-  final String bestOfPlaylistName;
+  final RuleConfig ruleConfig;
   final List<AppLog> logs;
   final String? lastError;
   final LikeResult? lastLikeResult;
@@ -29,8 +29,7 @@ class AppState {
     required this.spotifyInstalled,
     required this.authState,
     required this.triggerConfig,
-    required this.archivePlaylistName,
-    required this.bestOfPlaylistName,
+    required this.ruleConfig,
     required this.logs,
     required this.lastError,
     this.lastLikeResult,
@@ -48,8 +47,7 @@ class AppState {
       spotifyInstalled: false,
       authState: const SpotifyAuthState.disconnected(),
       triggerConfig: config,
-      archivePlaylistName: 'Discover Weekly Archive',
-      bestOfPlaylistName: 'Botbotb(Best of the best of the best)',
+      ruleConfig: RuleConfig.defaults(),
       logs: const <AppLog>[],
       lastError: null,
     );
@@ -64,8 +62,7 @@ class AppState {
     bool? spotifyInstalled,
     SpotifyAuthState? authState,
     TriggerConfig? triggerConfig,
-    String? archivePlaylistName,
-    String? bestOfPlaylistName,
+    RuleConfig? ruleConfig,
     List<AppLog>? logs,
     String? lastError,
     bool clearError = false,
@@ -84,8 +81,7 @@ class AppState {
       spotifyInstalled: spotifyInstalled ?? this.spotifyInstalled,
       authState: authState ?? this.authState,
       triggerConfig: triggerConfig ?? this.triggerConfig,
-      archivePlaylistName: archivePlaylistName ?? this.archivePlaylistName,
-      bestOfPlaylistName: bestOfPlaylistName ?? this.bestOfPlaylistName,
+      ruleConfig: ruleConfig ?? this.ruleConfig,
       logs: logs ?? this.logs,
       lastError: clearError ? null : (lastError ?? this.lastError),
       lastLikeResult: clearLikeResult ? null : (lastLikeResult ?? this.lastLikeResult),

@@ -13,11 +13,21 @@ object AppConstants {
     const val KEY_SPOTIFY_CLIENT_ID = "spotify_client_id"
     const val KEY_SPOTIFY_USER_ID = "spotify_user_id"
 
-    const val KEY_ARCHIVE_PLAYLIST_NAME = "archive_playlist_name"
-    const val KEY_BEST_OF_PLAYLIST_NAME = "best_of_playlist_name"
+    const val KEY_RULE_ARCHIVE_REMOVE_ENABLED = "rule_archive_remove_enabled"
+    const val KEY_RULE_ARCHIVE_PLAYLIST_NAME = "rule_archive_playlist_name"
+    const val KEY_RULE_BEST_OF_ENABLED = "rule_best_of_enabled"
+    const val KEY_RULE_BEST_OF_PLAYLIST_NAME = "rule_best_of_playlist_name"
+    const val KEY_RULE_BEST_OF_THRESHOLD = "rule_best_of_threshold"
+    const val KEY_RULE_FOLLOW_ARTIST_ENABLED = "rule_follow_artist_enabled"
+    const val KEY_RULE_FOLLOW_ARTIST_THRESHOLD = "rule_follow_artist_threshold"
+
+    const val DEFAULT_ARCHIVE_PLAYLIST_NAME = "Discover Weekly Archive"
+    const val DEFAULT_BEST_OF_PLAYLIST_NAME = "Botbotb(Best of the best of the best)"
+    const val DEFAULT_BEST_OF_THRESHOLD = 3
+    const val DEFAULT_FOLLOW_ARTIST_THRESHOLD = 5
+
     const val KEY_TRACK_LIKE_COUNTS = "track_like_counts"
     const val KEY_ARTIST_LIKE_COUNTS = "artist_like_counts"
-    const val KEY_TRACKED_ARTIST_IDS = "tracked_artist_ids"
     const val KEY_PLAYLIST_CACHE = "playlist_cache"
     const val KEY_PLAYLIST_CACHE_TIMESTAMP = "playlist_cache_timestamp"
     const val KEY_SUPABASE_URL = "supabase_url"

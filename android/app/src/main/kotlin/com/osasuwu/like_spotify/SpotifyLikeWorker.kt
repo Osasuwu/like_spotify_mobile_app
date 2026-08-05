@@ -1,6 +1,7 @@
 package com.osasuwu.like_spotify
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
@@ -8,6 +9,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.OutputStreamWriter
@@ -16,12 +18,14 @@ import java.net.URLEncoder
 import java.net.URL
 
 /**
- * Minimal background worker for liking the current Spotify track.
+ * Background worker for liking the current Spotify track when the Flutter engine
+ * is not attached (background media-button trigger via WorkManager).
  *
- * Business logic (playlist management, like counting, artist follow) now lives
- * in the shared Dart layer ([SpotifyMusicServiceRepository.likeTrack]).
- * This worker only handles the core like operation for when the Flutter engine
- * is not active (background media-button trigger via WorkManager).
+ * Mirrors the canonical rule pipeline in the Dart layer
+ * ([SpotifyMusicServiceRepository.likeTrack]): like -> remove from archive playlist
+ * (non-blocking) -> increment track like count (Supabase-first, local fallback) ->
+ * promote to best-of playlist at threshold -> increment artist like count (local only) ->
+ * auto-follow artist at threshold.
  */
 class SpotifyLikeWorker(
     appContext: Context,
@@ -61,8 +65,8 @@ class SpotifyLikeWorker(
         }
 
         // Get current track
-        var trackId = currentTrackId(accessToken)
-        if (trackId == null && !refreshToken.isNullOrBlank() && !clientId.isNullOrBlank()) {
+        var track = currentTrack(accessToken)
+        if (track == null && !refreshToken.isNullOrBlank() && !clientId.isNullOrBlank()) {
             // 401 retry
             val refreshed = refreshAccessToken(refreshToken, clientId)
             if (refreshed != null && refreshed.accessToken.isNotBlank()) {
@@ -70,37 +74,270 @@ class SpotifyLikeWorker(
                 prefs.edit()
                     .putString(AppConstants.KEY_SPOTIFY_ACCESS_TOKEN, accessToken)
                     .apply()
-                trackId = currentTrackId(accessToken)
+                track = currentTrack(accessToken)
             }
         }
 
-        if (trackId.isNullOrBlank()) {
+        if (track == null) {
             log("Like skipped: no currently playing track")
             playFeedbackTone(success = false)
             return Result.success()
         }
 
-        // Like the track
-        val liked = likeTrack(trackId, accessToken)
-        playFeedbackTone(success = liked)
-        if (liked) {
-            log("Liked track: $trackId")
-        } else {
-            log("Like failed for track: $trackId")
+        val token = accessToken
+        if (token.isNullOrBlank()) {
+            playFeedbackTone(success = false)
+            return Result.success()
         }
+
+        // Like the track
+        val liked = likeTrack(track.id, token)
+        playFeedbackTone(success = liked)
+        if (!liked) {
+            log("Like failed for track: ${track.id}")
+            return Result.success()
+        }
+        log("Liked track: ${track.id}")
+
+        runRulePipeline(prefs, token, track)
 
         return Result.success()
     }
 
-    private fun currentTrackId(token: String?): String? {
+    private fun runRulePipeline(prefs: SharedPreferences, token: String, track: CurrentTrack) {
+        val ruleConfig = loadRuleConfig(prefs)
+
+        if (ruleConfig.archiveRemoveEnabled) {
+            runCatching {
+                val archiveId = findPlaylistByName(prefs, ruleConfig.archivePlaylistName, token)
+                if (archiveId != null && removeTrackFromPlaylist(archiveId, track.uri, token)) {
+                    log("Removed from archive playlist: ${ruleConfig.archivePlaylistName}")
+                }
+            }.onFailure { log("Archive removal failed: ${it.message}") }
+        }
+
+        val trackCount = runCatching { incrementTrackLikeCount(prefs, track.id) }
+            .getOrElse { incrementLocalCount(prefs, AppConstants.KEY_TRACK_LIKE_COUNTS, track.id) }
+        if (ruleConfig.bestOfEnabled && trackCount == ruleConfig.bestOfThreshold) {
+            runCatching {
+                val bestOfId = ensurePlaylist(prefs, ruleConfig.bestOfPlaylistName, token)
+                if (bestOfId != null && addTrackToPlaylist(bestOfId, track.uri, token)) {
+                    log("Added to best-of playlist: ${ruleConfig.bestOfPlaylistName}")
+                }
+            }.onFailure { log("Best-of promotion failed: ${it.message}") }
+        }
+
+        val artistId = track.artistId ?: return
+        val artistCount = incrementLocalCount(prefs, AppConstants.KEY_ARTIST_LIKE_COUNTS, artistId)
+        if (ruleConfig.followArtistEnabled && artistCount == ruleConfig.followArtistThreshold) {
+            runCatching {
+                if (followArtist(artistId, token)) {
+                    log("Auto-followed artist: $artistId")
+                }
+            }.onFailure { log("Follow artist failed: ${it.message}") }
+        }
+    }
+
+    // ---- Rule config -------------------------------------------------
+
+    private fun loadRuleConfig(prefs: SharedPreferences): RuleConfig {
+        return RuleConfig(
+            archiveRemoveEnabled = prefs.getBoolean(AppConstants.KEY_RULE_ARCHIVE_REMOVE_ENABLED, true),
+            archivePlaylistName = prefs.getString(AppConstants.KEY_RULE_ARCHIVE_PLAYLIST_NAME, null)
+                ?.takeIf { it.isNotBlank() } ?: AppConstants.DEFAULT_ARCHIVE_PLAYLIST_NAME,
+            bestOfEnabled = prefs.getBoolean(AppConstants.KEY_RULE_BEST_OF_ENABLED, true),
+            bestOfPlaylistName = prefs.getString(AppConstants.KEY_RULE_BEST_OF_PLAYLIST_NAME, null)
+                ?.takeIf { it.isNotBlank() } ?: AppConstants.DEFAULT_BEST_OF_PLAYLIST_NAME,
+            bestOfThreshold = prefs.getInt(AppConstants.KEY_RULE_BEST_OF_THRESHOLD, AppConstants.DEFAULT_BEST_OF_THRESHOLD)
+                .takeIf { it >= 1 } ?: AppConstants.DEFAULT_BEST_OF_THRESHOLD,
+            followArtistEnabled = prefs.getBoolean(AppConstants.KEY_RULE_FOLLOW_ARTIST_ENABLED, true),
+            followArtistThreshold = prefs.getInt(
+                AppConstants.KEY_RULE_FOLLOW_ARTIST_THRESHOLD,
+                AppConstants.DEFAULT_FOLLOW_ARTIST_THRESHOLD
+            ).takeIf { it >= 1 } ?: AppConstants.DEFAULT_FOLLOW_ARTIST_THRESHOLD
+        )
+    }
+
+    // ---- Like counting -------------------------------------------------
+
+    private fun incrementTrackLikeCount(prefs: SharedPreferences, trackId: String): Int {
+        val supabaseUrl = prefs.getString(AppConstants.KEY_SUPABASE_URL, null)
+        val supabaseKey = prefs.getString(AppConstants.KEY_SUPABASE_ANON_KEY, null)
+        val userId = prefs.getString(AppConstants.KEY_SPOTIFY_USER_ID, null)
+        if (!supabaseUrl.isNullOrBlank() && !supabaseKey.isNullOrBlank() && !userId.isNullOrBlank()) {
+            val remoteCount = incrementTrackLikeCountRemote(supabaseUrl, supabaseKey, userId, trackId)
+            if (remoteCount != null) return remoteCount
+        }
+        return incrementLocalCount(prefs, AppConstants.KEY_TRACK_LIKE_COUNTS, trackId)
+    }
+
+    private fun incrementTrackLikeCountRemote(
+        supabaseUrl: String,
+        supabaseAnonKey: String,
+        userId: String,
+        trackId: String
+    ): Int? {
+        return try {
+            val connection = URL("$supabaseUrl/rest/v1/rpc/increment_track_like").openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("apikey", supabaseAnonKey)
+            connection.setRequestProperty("Authorization", "Bearer $supabaseAnonKey")
+            val body = JSONObject()
+                .put("p_user_id", userId)
+                .put("p_track_id", trackId)
+                .toString()
+            OutputStreamWriter(connection.outputStream).use { it.write(body) }
+            if (connection.responseCode !in 200..299) return null
+            readBody(connection)?.trim()?.toIntOrNull()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun incrementLocalCount(prefs: SharedPreferences, key: String, id: String): Int {
+        val map = loadCountMap(prefs, key)
+        val next = map.optInt(id, 0) + 1
+        map.put(id, next)
+        prefs.edit().putString(key, map.toString()).apply()
+        return next
+    }
+
+    private fun loadCountMap(prefs: SharedPreferences, key: String): JSONObject {
+        val raw = prefs.getString(key, null) ?: return JSONObject()
+        return try {
+            JSONObject(raw)
+        } catch (_: Exception) {
+            JSONObject()
+        }
+    }
+
+    // ---- Playlist lookup / creation -------------------------------------------------
+
+    private fun findPlaylistByName(prefs: SharedPreferences, name: String, token: String): String? {
+        val cache = loadPlaylistCache(prefs)
+        cache.keys().forEach { key ->
+            if (key.equals(name, ignoreCase = true)) {
+                cache.optString(key).takeIf { it.isNotBlank() }?.let { return it }
+            }
+        }
+
+        val limit = 50
+        var offset = 0
+        while (true) {
+            val connection = api("https://api.spotify.com/v1/me/playlists?limit=$limit&offset=$offset", token, "GET")
+            if (connection.responseCode !in 200..299) break
+            val payload = readBody(connection) ?: break
+            val json = JSONObject(payload)
+            val items = json.optJSONArray("items") ?: break
+
+            var found: String? = null
+            for (i in 0 until items.length()) {
+                val playlist = items.optJSONObject(i) ?: continue
+                val playlistName = playlist.optString("name")
+                val playlistId = playlist.optString("id")
+                if (playlistName.isBlank() || playlistId.isBlank()) continue
+                cache.put(playlistName, playlistId)
+                if (found == null && playlistName.equals(name, ignoreCase = true)) found = playlistId
+            }
+            savePlaylistCache(prefs, cache)
+            if (found != null) return found
+
+            val total = json.optInt("total", items.length())
+            offset += limit
+            if (items.length() < limit || offset >= total) break
+        }
+        return null
+    }
+
+    private fun ensurePlaylist(prefs: SharedPreferences, name: String, token: String): String? {
+        findPlaylistByName(prefs, name, token)?.let { return it }
+
+        val userId = getCurrentUserId(prefs, token) ?: return null
+        val body = JSONObject()
+            .put("name", name)
+            .put("public", false)
+            .put("description", "Managed by Like Spotify Mobile App")
+            .toString()
+
+        // Invalidate the cache before creating so a concurrent rebuild can't miss the new playlist.
+        savePlaylistCache(prefs, JSONObject())
+
+        val connection = apiWithBody("https://api.spotify.com/v1/users/$userId/playlists", token, "POST", body)
+        if (connection.responseCode !in 200..299) return null
+        val payload = readBody(connection) ?: return null
+        val id = JSONObject(payload).optString("id").takeIf { it.isNotBlank() } ?: return null
+
+        val cache = loadPlaylistCache(prefs)
+        cache.put(name, id)
+        savePlaylistCache(prefs, cache)
+        return id
+    }
+
+    private fun loadPlaylistCache(prefs: SharedPreferences): JSONObject {
+        val timestamp = prefs.getLong(AppConstants.KEY_PLAYLIST_CACHE_TIMESTAMP, 0L)
+        if (System.currentTimeMillis() - timestamp > AppConstants.PLAYLIST_CACHE_TTL_MS) return JSONObject()
+        val raw = prefs.getString(AppConstants.KEY_PLAYLIST_CACHE, null) ?: return JSONObject()
+        return try {
+            JSONObject(raw)
+        } catch (_: Exception) {
+            JSONObject()
+        }
+    }
+
+    private fun savePlaylistCache(prefs: SharedPreferences, cache: JSONObject) {
+        prefs.edit()
+            .putString(AppConstants.KEY_PLAYLIST_CACHE, cache.toString())
+            .putLong(AppConstants.KEY_PLAYLIST_CACHE_TIMESTAMP, System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun getCurrentUserId(prefs: SharedPreferences, token: String): String? {
+        prefs.getString(AppConstants.KEY_SPOTIFY_USER_ID, null)?.takeIf { it.isNotBlank() }?.let { return it }
+        val connection = api("https://api.spotify.com/v1/me", token, "GET")
+        if (connection.responseCode !in 200..299) return null
+        val payload = readBody(connection) ?: return null
+        val id = JSONObject(payload).optString("id").takeIf { it.isNotBlank() } ?: return null
+        prefs.edit().putString(AppConstants.KEY_SPOTIFY_USER_ID, id).apply()
+        return id
+    }
+
+    private fun addTrackToPlaylist(playlistId: String, trackUri: String, token: String): Boolean {
+        val body = JSONObject().put("uris", JSONArray().put(trackUri)).toString()
+        val connection = apiWithBody("https://api.spotify.com/v1/playlists/$playlistId/tracks", token, "POST", body)
+        return connection.responseCode in 200..299
+    }
+
+    private fun removeTrackFromPlaylist(playlistId: String, trackUri: String, token: String): Boolean {
+        val track = JSONObject().put("uri", trackUri)
+        val body = JSONObject().put("tracks", JSONArray().put(track)).toString()
+        val connection = apiWithBody("https://api.spotify.com/v1/playlists/$playlistId/tracks", token, "DELETE", body)
+        return connection.responseCode in 200..299
+    }
+
+    private fun followArtist(artistId: String, token: String): Boolean {
+        val encoded = URLEncoder.encode(artistId, Charsets.UTF_8.name())
+        val connection = api("https://api.spotify.com/v1/me/following?type=artist&ids=$encoded", token, "PUT")
+        return connection.responseCode in 200..299
+    }
+
+    // ---- Core like + track lookup -------------------------------------------------
+
+    private fun currentTrack(token: String?): CurrentTrack? {
         if (token.isNullOrBlank()) return null
         val connection = api("https://api.spotify.com/v1/me/player/currently-playing", token, "GET")
         val code = connection.responseCode
         if (code == 204 || code !in 200..299) return null
         val payload = readBody(connection) ?: return null
-        val json = JSONObject(payload)
-        val id = json.optJSONObject("item")?.optString("id")
-        return if (id.isNullOrBlank()) null else id
+        val item = JSONObject(payload).optJSONObject("item") ?: return null
+        val id = item.optString("id")
+        if (id.isBlank()) return null
+        val uri = item.optString("uri").ifBlank { "spotify:track:$id" }
+        val artistId = item.optJSONArray("artists")?.optJSONObject(0)?.optString("id")?.takeIf { it.isNotBlank() }
+        return CurrentTrack(id = id, uri = uri, artistId = artistId)
     }
 
     private fun likeTrack(trackId: String, token: String?): Boolean {
@@ -138,11 +375,27 @@ class SpotifyLikeWorker(
         )
     }
 
+    // ---- HTTP plumbing -------------------------------------------------
+
     private fun api(url: String, token: String, method: String): HttpURLConnection {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.requestMethod = method
         connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
         if (method == "PUT") connection.doOutput = true
+        return connection
+    }
+
+    private fun apiWithBody(url: String, token: String, method: String, body: String): HttpURLConnection {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.requestMethod = method
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
+        connection.doOutput = true
+        OutputStreamWriter(connection.outputStream).use { it.write(body) }
         return connection
     }
 
@@ -165,6 +418,22 @@ class SpotifyLikeWorker(
             .getInstance(applicationContext)
             .sendBroadcast(intent)
     }
+
+    private data class CurrentTrack(
+        val id: String,
+        val uri: String,
+        val artistId: String?
+    )
+
+    private data class RuleConfig(
+        val archiveRemoveEnabled: Boolean,
+        val archivePlaylistName: String,
+        val bestOfEnabled: Boolean,
+        val bestOfPlaylistName: String,
+        val bestOfThreshold: Int,
+        val followArtistEnabled: Boolean,
+        val followArtistThreshold: Int
+    )
 
     data class RefreshedToken(
         val accessToken: String,

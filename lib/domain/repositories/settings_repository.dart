@@ -1,13 +1,12 @@
 import '../entities/pending_like.dart';
+import '../entities/rule_config.dart';
 import '../entities/trigger_config.dart';
 
 abstract class SettingsRepository {
   Future<TriggerConfig> loadTriggerConfig();
   Future<void> saveTriggerConfig(TriggerConfig config);
-  Future<String> loadArchivePlaylistName();
-  Future<void> saveArchivePlaylistName(String name);
-  Future<String> loadBestOfPlaylistName();
-  Future<void> saveBestOfPlaylistName(String name);
+  Future<RuleConfig> loadRuleConfig();
+  Future<void> saveRuleConfig(RuleConfig config);
   Future<bool> loadServiceEnabled();
   Future<void> saveServiceEnabled(bool enabled);
   Future<List<String>> loadLogs();

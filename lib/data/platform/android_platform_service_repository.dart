@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import '../../core/app_constants.dart';
+import '../../domain/entities/rule_config.dart';
 import '../../domain/entities/trigger_config.dart';
 import '../../domain/repositories/platform_service_repository.dart';
 
@@ -96,14 +97,8 @@ class AndroidPlatformServiceRepository implements PlatformServiceRepository {
   }
 
   @override
-  Future<void> updatePlaylistRules({
-    required String archivePlaylistName,
-    required String bestOfPlaylistName,
-  }) async {
-    await _methodChannel.invokeMethod<void>('setPlaylistRules', <String, dynamic>{
-      'archivePlaylistName': archivePlaylistName,
-      'bestOfPlaylistName': bestOfPlaylistName,
-    });
+  Future<void> updateRuleConfig(RuleConfig config) async {
+    await _methodChannel.invokeMethod<void>('setRuleConfig', config.toJson());
   }
 
   @override

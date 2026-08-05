@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:like_spotify_mobile_app/domain/entities/app_log.dart';
+import 'package:like_spotify_mobile_app/domain/entities/rule_config.dart';
 import 'package:like_spotify_mobile_app/domain/entities/spotify_auth_state.dart';
 import 'package:like_spotify_mobile_app/domain/entities/trigger_config.dart';
 import 'package:like_spotify_mobile_app/presentation/state/app_state.dart';
@@ -11,6 +12,34 @@ void main() {
       windowMs: 5000,
       debounceMs: 500,
     );
+
+    AppState buildState({
+      bool serviceEnabled = false,
+      bool loading = false,
+      bool isMiui = false,
+      bool batteryOptimized = true,
+      bool notificationListenerEnabled = false,
+      bool spotifyInstalled = false,
+      SpotifyAuthState authState = const SpotifyAuthState.disconnected(),
+      TriggerConfig? triggerConfig,
+      RuleConfig? ruleConfig,
+      List<AppLog> logs = const <AppLog>[],
+      String? lastError,
+    }) {
+      return AppState(
+        serviceEnabled: serviceEnabled,
+        loading: loading,
+        isMiui: isMiui,
+        batteryOptimized: batteryOptimized,
+        notificationListenerEnabled: notificationListenerEnabled,
+        spotifyInstalled: spotifyInstalled,
+        authState: authState,
+        triggerConfig: triggerConfig ?? testConfig,
+        ruleConfig: ruleConfig ?? RuleConfig.defaults(),
+        logs: logs,
+        lastError: lastError,
+      );
+    }
 
     group('initial factory', () {
       test('creates initial state with correct defaults', () {
@@ -32,12 +61,13 @@ void main() {
         expect(state.authState.refreshToken, isNull);
       });
 
-      test('sets correct playlist names', () {
+      test('sets default rule config', () {
         final state = AppState.initial(testConfig);
 
-        expect(state.archivePlaylistName, equals('Discover Weekly Archive'));
+        expect(state.ruleConfig.archivePlaylistName,
+            equals('Discover Weekly Archive'));
         expect(
-          state.bestOfPlaylistName,
+          state.ruleConfig.bestOfPlaylistName,
           equals('Botbotb(Best of the best of the best)'),
         );
       });
@@ -106,18 +136,13 @@ void main() {
         expect(updated.spotifyInstalled, equals(true));
       });
 
-      test('updates archivePlaylistName field', () {
+      test('updates ruleConfig field', () {
         final state = AppState.initial(testConfig);
-        final updated = state.copyWith(archivePlaylistName: 'New Archive');
+        final newRuleConfig =
+            RuleConfig.defaults().copyWith(archivePlaylistName: 'New Archive');
+        final updated = state.copyWith(ruleConfig: newRuleConfig);
 
-        expect(updated.archivePlaylistName, equals('New Archive'));
-      });
-
-      test('updates bestOfPlaylistName field', () {
-        final state = AppState.initial(testConfig);
-        final updated = state.copyWith(bestOfPlaylistName: 'New Best Of');
-
-        expect(updated.bestOfPlaylistName, equals('New Best Of'));
+        expect(updated.ruleConfig.archivePlaylistName, equals('New Archive'));
       });
     });
 
@@ -174,20 +199,7 @@ void main() {
 
     group('copyWith with clearError', () {
       test('sets lastError to null when clearError is true', () {
-        final state = AppState(
-          serviceEnabled: false,
-          loading: false,
-          isMiui: false,
-          batteryOptimized: true,
-          notificationListenerEnabled: false,
-          spotifyInstalled: false,
-          authState: const SpotifyAuthState.disconnected(),
-          triggerConfig: testConfig,
-          archivePlaylistName: 'Discover Weekly Archive',
-          bestOfPlaylistName: 'Botbotb(Best of the best of the best)',
-          logs: const <AppLog>[],
-          lastError: 'Some error message',
-        );
+        final state = buildState(lastError: 'Some error message');
 
         final updated = state.copyWith(clearError: true);
 
@@ -195,20 +207,7 @@ void main() {
       });
 
       test('preserves other fields when clearing error', () {
-        final state = AppState(
-          serviceEnabled: true,
-          loading: false,
-          isMiui: false,
-          batteryOptimized: true,
-          notificationListenerEnabled: false,
-          spotifyInstalled: false,
-          authState: const SpotifyAuthState.disconnected(),
-          triggerConfig: testConfig,
-          archivePlaylistName: 'Discover Weekly Archive',
-          bestOfPlaylistName: 'Botbotb(Best of the best of the best)',
-          logs: const <AppLog>[],
-          lastError: 'Error',
-        );
+        final state = buildState(serviceEnabled: true, lastError: 'Error');
 
         final updated = state.copyWith(clearError: true);
 
@@ -217,20 +216,7 @@ void main() {
       });
 
       test('preserves error when clearError is false (default)', () {
-        final state = AppState(
-          serviceEnabled: false,
-          loading: false,
-          isMiui: false,
-          batteryOptimized: true,
-          notificationListenerEnabled: false,
-          spotifyInstalled: false,
-          authState: const SpotifyAuthState.disconnected(),
-          triggerConfig: testConfig,
-          archivePlaylistName: 'Discover Weekly Archive',
-          bestOfPlaylistName: 'Botbotb(Best of the best of the best)',
-          logs: const <AppLog>[],
-          lastError: 'Original error',
-        );
+        final state = buildState(lastError: 'Original error');
 
         final updated = state.copyWith(serviceEnabled: true);
 
@@ -238,20 +224,7 @@ void main() {
       });
 
       test('clearError can override lastError parameter', () {
-        final state = AppState(
-          serviceEnabled: false,
-          loading: false,
-          isMiui: false,
-          batteryOptimized: true,
-          notificationListenerEnabled: false,
-          spotifyInstalled: false,
-          authState: const SpotifyAuthState.disconnected(),
-          triggerConfig: testConfig,
-          archivePlaylistName: 'Discover Weekly Archive',
-          bestOfPlaylistName: 'Botbotb(Best of the best of the best)',
-          logs: const <AppLog>[],
-          lastError: 'Original error',
-        );
+        final state = buildState(lastError: 'Original error');
 
         final updated =
             state.copyWith(lastError: 'New error', clearError: true);
@@ -260,20 +233,7 @@ void main() {
       });
 
       test('lastError parameter without clearError sets new error', () {
-        final state = AppState(
-          serviceEnabled: false,
-          loading: false,
-          isMiui: false,
-          batteryOptimized: true,
-          notificationListenerEnabled: false,
-          spotifyInstalled: false,
-          authState: const SpotifyAuthState.disconnected(),
-          triggerConfig: testConfig,
-          archivePlaylistName: 'Discover Weekly Archive',
-          bestOfPlaylistName: 'Botbotb(Best of the best of the best)',
-          logs: const <AppLog>[],
-          lastError: null,
-        );
+        final state = buildState(lastError: null);
 
         final updated = state.copyWith(lastError: 'New error');
 
@@ -292,8 +252,12 @@ void main() {
         final logs = [
           AppLog(at: DateTime.now(), message: 'Log message'),
         ];
+        final ruleConfig = RuleConfig.defaults().copyWith(
+          archivePlaylistName: 'Custom Archive',
+          bestOfPlaylistName: 'Custom Best Of',
+        );
 
-        final state = AppState(
+        final state = buildState(
           serviceEnabled: true,
           loading: true,
           isMiui: true,
@@ -301,9 +265,7 @@ void main() {
           notificationListenerEnabled: true,
           spotifyInstalled: true,
           authState: authState,
-          triggerConfig: testConfig,
-          archivePlaylistName: 'Custom Archive',
-          bestOfPlaylistName: 'Custom Best Of',
+          ruleConfig: ruleConfig,
           logs: logs,
           lastError: 'Custom error',
         );
@@ -315,8 +277,8 @@ void main() {
         expect(state.notificationListenerEnabled, equals(true));
         expect(state.spotifyInstalled, equals(true));
         expect(state.authState.connected, equals(true));
-        expect(state.archivePlaylistName, equals('Custom Archive'));
-        expect(state.bestOfPlaylistName, equals('Custom Best Of'));
+        expect(state.ruleConfig.archivePlaylistName, equals('Custom Archive'));
+        expect(state.ruleConfig.bestOfPlaylistName, equals('Custom Best Of'));
         expect(state.logs.length, equals(1));
         expect(state.lastError, equals('Custom error'));
       });

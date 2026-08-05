@@ -9,6 +9,7 @@ import '../../core/app_constants.dart';
 import '../../data/spotify/spotify_music_service_repository.dart';
 import '../../domain/entities/app_log.dart';
 import '../../domain/entities/pending_like.dart';
+import '../../domain/entities/rule_config.dart';
 import '../../domain/entities/spotify_auth_state.dart';
 import '../../domain/entities/track_info.dart';
 import '../../domain/entities/trigger_config.dart';
@@ -58,8 +59,7 @@ class AppController extends StateNotifier<AppState> {
       final config = await _settingsRepository.loadTriggerConfig();
       final serviceEnabled = await _platformServiceRepository.isServiceEnabled();
       final auth = await _musicServiceRepository.getAuthState();
-        final archivePlaylistName = await _settingsRepository.loadArchivePlaylistName();
-        final bestOfPlaylistName = await _settingsRepository.loadBestOfPlaylistName();
+      final ruleConfig = await _settingsRepository.loadRuleConfig();
       final batteryIgnored =
           await _platformServiceRepository.isIgnoringBatteryOptimizations();
         final notificationListenerEnabled =
@@ -69,10 +69,7 @@ class AppController extends StateNotifier<AppState> {
       final logLines = await _settingsRepository.loadLogs();
 
       await _platformServiceRepository.updateTriggerConfig(config);
-      await _platformServiceRepository.updatePlaylistRules(
-        archivePlaylistName: archivePlaylistName,
-        bestOfPlaylistName: bestOfPlaylistName,
-      );
+      await _platformServiceRepository.updateRuleConfig(ruleConfig);
       await _platformServiceRepository.syncSupabaseConfig(
         supabaseUrl: supabaseUrl,
         supabaseAnonKey: supabaseAnonKey,
@@ -87,8 +84,7 @@ class AppController extends StateNotifier<AppState> {
         notificationListenerEnabled: notificationListenerEnabled,
         isMiui: isMiui,
         spotifyInstalled: spotifyInstalled,
-        archivePlaylistName: archivePlaylistName,
-        bestOfPlaylistName: bestOfPlaylistName,
+        ruleConfig: ruleConfig,
         logs: logLines
             .map((line) => AppLog(at: DateTime.now().toUtc(), message: line))
             .toList(growable: false),
@@ -176,24 +172,20 @@ class AppController extends StateNotifier<AppState> {
     await addLog('Trigger config updated to ${config.pattern} (${config.windowMs}ms)');
   }
 
-  Future<void> savePlaylistRules({
-    required String archivePlaylistName,
-    required String bestOfPlaylistName,
-  }) async {
-    final archive = archivePlaylistName.trim();
-    final bestOf = bestOfPlaylistName.trim();
-    await _settingsRepository.saveArchivePlaylistName(archive);
-    await _settingsRepository.saveBestOfPlaylistName(bestOf);
-    await _platformServiceRepository.updatePlaylistRules(
-      archivePlaylistName: archive,
-      bestOfPlaylistName: bestOf,
+  Future<void> saveRuleConfig(RuleConfig config) async {
+    final normalized = config.copyWith(
+      archivePlaylistName: config.archivePlaylistName.trim(),
+      bestOfPlaylistName: config.bestOfPlaylistName.trim(),
     );
-    state = state.copyWith(
-      archivePlaylistName: archive,
-      bestOfPlaylistName: bestOf,
-      clearError: true,
-    );
-    await addLog('Playlist rules updated');
+    final errors = normalized.validate();
+    if (errors.isNotEmpty) {
+      state = state.copyWith(lastError: errors.join(' '));
+      return;
+    }
+    await _settingsRepository.saveRuleConfig(normalized);
+    await _platformServiceRepository.updateRuleConfig(normalized);
+    state = state.copyWith(ruleConfig: normalized, clearError: true);
+    await addLog('Rule config updated');
   }
 
   Future<void> requestBatteryOptimizationExemption() async {

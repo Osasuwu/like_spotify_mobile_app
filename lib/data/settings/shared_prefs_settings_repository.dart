@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_constants.dart';
 import '../../domain/entities/pending_like.dart';
+import '../../domain/entities/rule_config.dart';
 import '../../domain/entities/trigger_config.dart';
 import '../../domain/repositories/settings_repository.dart';
 
@@ -11,8 +12,10 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
   static const _keyPattern = 'trigger_pattern';
   static const _keyWindow = 'trigger_window_ms';
   static const _keyDebounce = 'trigger_debounce_ms';
-  static const _keyArchivePlaylistName = 'archive_playlist_name';
-  static const _keyBestOfPlaylistName = 'best_of_playlist_name';
+  // Legacy keys — read once for migration into _keyRuleConfig, never written again.
+  static const _legacyKeyArchivePlaylistName = 'archive_playlist_name';
+  static const _legacyKeyBestOfPlaylistName = 'best_of_playlist_name';
+  static const _keyRuleConfig = 'rule_config';
   static const _keyServiceEnabled = 'service_enabled';
   static const _keyLogs = 'logs';
   static const _keyPendingLikes = 'pending_likes';
@@ -36,27 +39,35 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
   }
 
   @override
-  Future<String> loadArchivePlaylistName() async {
+  Future<RuleConfig> loadRuleConfig() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyArchivePlaylistName) ?? AppConstants.defaultArchivePlaylistName;
+    final raw = prefs.getString(_keyRuleConfig);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        return RuleConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } catch (_) {
+        // fall through to legacy migration / defaults
+      }
+    }
+
+    final legacyArchive = prefs.getString(_legacyKeyArchivePlaylistName);
+    final legacyBestOf = prefs.getString(_legacyKeyBestOfPlaylistName);
+    if (legacyArchive != null || legacyBestOf != null) {
+      final migrated = RuleConfig.defaults().copyWith(
+        archivePlaylistName: legacyArchive ?? AppConstants.defaultArchivePlaylistName,
+        bestOfPlaylistName: legacyBestOf ?? AppConstants.defaultBestOfPlaylistName,
+      );
+      await saveRuleConfig(migrated);
+      return migrated;
+    }
+
+    return RuleConfig.defaults();
   }
 
   @override
-  Future<void> saveArchivePlaylistName(String name) async {
+  Future<void> saveRuleConfig(RuleConfig config) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyArchivePlaylistName, name.trim());
-  }
-
-  @override
-  Future<String> loadBestOfPlaylistName() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyBestOfPlaylistName) ?? AppConstants.defaultBestOfPlaylistName;
-  }
-
-  @override
-  Future<void> saveBestOfPlaylistName(String name) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyBestOfPlaylistName, name.trim());
+    await prefs.setString(_keyRuleConfig, jsonEncode(config.toJson()));
   }
 
   @override
