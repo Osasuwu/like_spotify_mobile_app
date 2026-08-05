@@ -6,6 +6,8 @@ object AppConstants {
     const val KEY_PATTERN = "trigger_pattern"
     const val KEY_WINDOW_MS = "trigger_window_ms"
     const val KEY_DEBOUNCE_MS = "trigger_debounce_ms"
+    const val KEY_FEEDBACK_VOLUME = "trigger_feedback_volume"
+    const val DEFAULT_FEEDBACK_VOLUME = 25
 
     const val KEY_SPOTIFY_ACCESS_TOKEN = "spotify_access_token"
     const val KEY_SPOTIFY_REFRESH_TOKEN = "spotify_refresh_token"

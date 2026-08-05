@@ -1,25 +1,30 @@
 """Windows host — tray + global hotkey, the default flavor.
 
 Owns the Win32 side effects: tray icon, single-instance mutex, balloon
-notifications, `winsound` beep feedback, and the `HKCU\\…\\Run` autostart
-toggle. Anything cross-platform lives in `hosts/_common.py` so the
-`_stub.py` host (mac/linux CLI) can share it.
+notifications, synthesized-tone beep feedback, and the `HKCU\\…\\Run`
+autostart toggle. Anything cross-platform lives in `hosts/_common.py` so
+the `_stub.py` host (mac/linux CLI) can share it.
 
 Slice history:
     #21 — original tray launcher.
     #27 — renamed from `hosts/tray.py`; cross-platform helpers and the
           `like-once` subcommand split out so the same entry point works
           on every OS.
+    #53 — swapped `MessageBeep` for a synthesized tone played via
+          `PlaySound(..., SND_MEMORY)` (see `_synth_tone` below).
 """
 
 from __future__ import annotations
 
 import asyncio
 import ctypes
+import math
 import os
+import struct
 import sys
 import threading
 import time
+from array import array
 from pathlib import Path
 
 from like_spotify.core.pipeline import Pipeline
@@ -65,15 +70,88 @@ _ICON_WHITE = (255, 255, 255)
 _ICON_RED = (255, 60, 60)
 
 
+_TONE_SAMPLE_RATE = 44100
+
+
+def _synth_tone(segments: list[tuple[int, int]], volume: float = 1.0) -> bytes:
+    """Render (frequency_hz, duration_ms) segments to an in-memory PCM16
+    mono WAV buffer, playable via `winsound.PlaySound(..., SND_MEMORY)`.
+
+    Exists because the two built-in `winsound` options both failed on
+    real hardware: `MessageBeep` plays a named system-event sound, which
+    Focus Assist / Do Not Disturb suppresses like any notification sound;
+    `Beep` drives the legacy PC-speaker/timer tone, which modern audio
+    codecs leave unwired to the physical speakers (confirmed silent here —
+    only a brief hiccup in whatever else was playing). A synthesized tone
+    plays as an ordinary audio-session buffer instead, mirroring the
+    phone's `ToneGenerator(AudioManager.STREAM_MUSIC, ...)` feedback
+    (`FeedbackPlayer.kt`) rather than routing through any OS notification
+    channel.
+
+    `volume` (0.0-1.0, see `_common.resolve_feedback_volume`) scales a
+    24000-peak waveform, so 0.5 reproduces the level this shipped at
+    before the setting existed.
+    """
+    peak = 24000 * max(0.0, min(1.0, volume))
+    fade = int(_TONE_SAMPLE_RATE * 0.005)  # 5ms fade in/out — avoids clicks
+    gap = int(_TONE_SAMPLE_RATE * 0.03)  # 30ms silence between notes
+    samples = array("h")
+    for freq, duration_ms in segments:
+        n = int(_TONE_SAMPLE_RATE * duration_ms / 1000)
+        for i in range(n):
+            amp = 1.0
+            if i < fade:
+                amp = i / fade
+            elif i > n - fade:
+                amp = (n - i) / fade
+            value = math.sin(2 * math.pi * freq * i / _TONE_SAMPLE_RATE)
+            samples.append(int(value * amp * peak))
+        samples.extend([0] * gap)
+    data = samples.tobytes()
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + len(data),
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,  # PCM
+        1,  # mono
+        _TONE_SAMPLE_RATE,
+        _TONE_SAMPLE_RATE * 2,  # byte rate (16-bit mono)
+        2,  # block align
+        16,  # bits per sample
+        b"data",
+        len(data),
+    )
+    return header + data
+
+
+def _synth_tones(volume: float) -> dict[str, bytes]:
+    """Rising two-note chime (like), a single mid tone (remove), a low
+    double buzz (error) — distinct enough to tell apart without looking
+    at the tray. Rebuilt per `TrayFeedback` instance so `volume` (from
+    `trigger.feedback_volume`) takes effect.
+    """
+    return {
+        "like": _synth_tone([(784, 90), (1175, 110)], volume=volume),
+        "remove": _synth_tone([(587, 150)], volume=volume),
+        "error": _synth_tone([(220, 90), (220, 90)], volume=volume),
+    }
+
+
 class TrayFeedback:
     """Owns the tray icon + flash / beep / balloon feedback."""
 
-    def __init__(self, hotkey: str) -> None:
+    def __init__(
+        self, hotkey: str, volume: float = _common.DEFAULT_FEEDBACK_VOLUME
+    ) -> None:
         self._hotkey = hotkey
         self._icon_default = _make_heart_icon(_ICON_GREEN)
         self._icon_success = _make_heart_icon(_ICON_WHITE)
         self._icon_error = _make_heart_icon(_ICON_RED)
         self._icon = None  # set in run()
+        self._tones = _synth_tones(volume)
 
     def attach(self, icon) -> None:
         self._icon = icon
@@ -101,24 +179,21 @@ class TrayFeedback:
     def _beep(self, success: bool, kind: str) -> None:
         """Audible confirmation through the default sound device.
 
-        Uses `MessageBeep` (plays a system event sound via the default
-        output) rather than `Beep` (a PC-speaker / system-timer tone that
-        is silent on most modern laptops — the root cause of "no sound").
-        Distinct tones per outcome so like / remove / error are
-        distinguishable without looking at the tray:
-
-            like   → MB_ICONASTERISK   (0x40)
-            remove → MB_ICONEXCLAMATION (0x30)
-            error  → MB_ICONHAND        (0x10)
+        Plays a synthesized tone (`_synth_tone`, see module docstring) via
+        `PlaySound(..., SND_MEMORY)` rather than `MessageBeep` or `Beep` —
+        both proved unreliable/silent on real hardware. Distinct tones per
+        outcome so like / remove / error are distinguishable without
+        looking at the tray.
         """
         import winsound
 
         if not success:
-            winsound.MessageBeep(0x10)
+            tone = self._tones["error"]
         elif kind == "remove":
-            winsound.MessageBeep(0x30)
+            tone = self._tones["remove"]
         else:
-            winsound.MessageBeep(0x40)
+            tone = self._tones["like"]
+        winsound.PlaySound(tone, winsound.SND_MEMORY | winsound.SND_ASYNC)
 
     @property
     def default_icon(self):
@@ -426,7 +501,9 @@ def _run_resident_host() -> int:
         )
         return 2
 
-    feedback = TrayFeedback(hotkey=hotkey)
+    feedback = TrayFeedback(
+        hotkey=hotkey, volume=_common.resolve_feedback_volume(cfg)
+    )
     storage = _common.build_storage(cfg)
     post_actions = _common.build_post_actions(cfg, storage)
     pipeline = Pipeline(

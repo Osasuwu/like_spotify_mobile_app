@@ -51,6 +51,11 @@ from like_spotify.extensions.tray_hotkey_trigger import DEFAULT_HOTKEY
 # pattern, so this is desktop-only by design.
 DEFAULT_REMOVE_HOTKEY = "ctrl+shift+alt+q"
 
+# Beep loudness (0.0-1.0) for the synthesized tray tone (#53). Tuned down
+# from the tone's initial full-scale level, which was audible but jarring
+# for a hotkey confirmation played over whatever's already in the speakers.
+DEFAULT_FEEDBACK_VOLUME = 0.25
+
 # ── Paths ──────────────────────────────────────────────────────────────
 
 
@@ -224,6 +229,16 @@ def make_provider(client_id: str):
 
 def resolve_remove_hotkey(cfg: dict) -> str:
     return cfg.get("trigger", {}).get("remove_hotkey", DEFAULT_REMOVE_HOTKEY)
+
+
+def resolve_feedback_volume(cfg: dict) -> float:
+    """Clamp `trigger.feedback_volume` to [0.0, 1.0]; bad/missing → default."""
+    raw = cfg.get("trigger", {}).get("feedback_volume", DEFAULT_FEEDBACK_VOLUME)
+    try:
+        volume = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_FEEDBACK_VOLUME
+    return max(0.0, min(1.0, volume))
 
 
 def run_one_shot(pipeline, feedback) -> int:

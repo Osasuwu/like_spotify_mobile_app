@@ -24,6 +24,7 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
   late bool _archiveRemoveEnabled;
   late bool _bestOfEnabled;
   late bool _followArtistEnabled;
+  late int _feedbackVolume;
 
   @override
   void initState() {
@@ -34,6 +35,7 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
     _pattern = TextEditingController(text: config.pattern);
     _window = TextEditingController(text: config.windowMs.toString());
     _debounce = TextEditingController(text: config.debounceMs.toString());
+    _feedbackVolume = config.feedbackVolume;
     _archivePlaylistName = TextEditingController(text: ruleConfig.archivePlaylistName);
     _bestOfPlaylistName = TextEditingController(text: ruleConfig.bestOfPlaylistName);
     _bestOfThreshold = TextEditingController(text: ruleConfig.bestOfThreshold.toString());
@@ -83,6 +85,16 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
               controller: _debounce,
               decoration: const InputDecoration(labelText: 'Debounce (ms)'),
               keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 12),
+            Text('Feedback sound volume: $_feedbackVolume%'),
+            Slider(
+              value: _feedbackVolume.toDouble(),
+              min: 0,
+              max: 100,
+              divisions: 20,
+              label: '$_feedbackVolume%',
+              onChanged: (value) => setState(() => _feedbackVolume = value.round()),
             ),
             const SizedBox(height: 20),
             const Divider(),
@@ -141,6 +153,7 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
                   pattern: _pattern.text.trim(),
                   windowMs: int.tryParse(_window.text.trim()) ?? 1000,
                   debounceMs: int.tryParse(_debounce.text.trim()) ?? 650,
+                  feedbackVolume: _feedbackVolume,
                 );
                 final ruleConfig = RuleConfig(
                   archiveRemoveEnabled: _archiveRemoveEnabled,

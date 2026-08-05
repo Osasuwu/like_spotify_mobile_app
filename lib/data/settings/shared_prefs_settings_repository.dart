@@ -13,6 +13,7 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
   static const _keyPattern = 'trigger_pattern';
   static const _keyWindow = 'trigger_window_ms';
   static const _keyDebounce = 'trigger_debounce_ms';
+  static const _keyFeedbackVolume = 'trigger_feedback_volume';
   // Legacy keys — read once for migration into _keyRuleConfig, never written again.
   static const _legacyKeyArchivePlaylistName = 'archive_playlist_name';
   static const _legacyKeyBestOfPlaylistName = 'best_of_playlist_name';
@@ -28,6 +29,8 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
       pattern: prefs.getString(_keyPattern) ?? AppConstants.defaultPattern,
       windowMs: prefs.getInt(_keyWindow) ?? AppConstants.defaultWindowMs,
       debounceMs: prefs.getInt(_keyDebounce) ?? AppConstants.defaultDebounceMs,
+      feedbackVolume:
+          prefs.getInt(_keyFeedbackVolume) ?? AppConstants.defaultFeedbackVolume,
     );
   }
 
@@ -37,6 +40,7 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
     await prefs.setString(_keyPattern, config.pattern);
     await prefs.setInt(_keyWindow, config.windowMs);
     await prefs.setInt(_keyDebounce, config.debounceMs);
+    await prefs.setInt(_keyFeedbackVolume, config.feedbackVolume);
   }
 
   @override

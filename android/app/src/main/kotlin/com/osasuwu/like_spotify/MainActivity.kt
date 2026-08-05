@@ -52,10 +52,12 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 					val pattern = call.argument<String>("pattern") ?: "pause,play"
 					val window = call.argument<Int>("windowMs")?.toLong() ?: 1000L
 					val debounce = call.argument<Int>("debounceMs")?.toLong() ?: 650L
+					val volume = call.argument<Int>("feedbackVolume") ?: AppConstants.DEFAULT_FEEDBACK_VOLUME
 					prefs().edit()
 						.putString(AppConstants.KEY_PATTERN, pattern)
 						.putLong(AppConstants.KEY_WINDOW_MS, window)
 						.putLong(AppConstants.KEY_DEBOUNCE_MS, debounce)
+						.putInt(AppConstants.KEY_FEEDBACK_VOLUME, volume)
 						.apply()
 					result.success(true)
 				}

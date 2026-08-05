@@ -35,6 +35,7 @@ class AndroidPlatformServiceRepository implements PlatformServiceRepository {
       'pattern': config.pattern,
       'windowMs': config.windowMs,
       'debounceMs': config.debounceMs,
+      'feedbackVolume': config.feedbackVolume,
     });
   }
 

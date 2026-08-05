@@ -41,6 +41,7 @@ class AppController extends StateNotifier<AppState> {
               pattern: AppConstants.defaultPattern,
               windowMs: AppConstants.defaultWindowMs,
               debounceMs: AppConstants.defaultDebounceMs,
+              feedbackVolume: AppConstants.defaultFeedbackVolume,
             ),
           ),
         ) {

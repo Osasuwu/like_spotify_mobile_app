@@ -11,7 +11,9 @@ import android.os.VibratorManager
 object FeedbackPlayer {
     fun play(context: Context, success: Boolean) {
         runCatching {
-            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+            val prefs = context.getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
+            val volume = prefs.getInt(AppConstants.KEY_FEEDBACK_VOLUME, AppConstants.DEFAULT_FEEDBACK_VOLUME)
+            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, volume)
             val toneType = if (success) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_PROP_NACK
             tone.startTone(toneType, 180)
             tone.release()
