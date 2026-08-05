@@ -79,15 +79,17 @@ class SpotifyPlaylistService {
   Future<void> addTrack(String accessToken, String playlistId, String trackUri) =>
       _client.addTracksToPlaylist(accessToken, playlistId: playlistId, trackUris: [trackUri]);
 
-  Future<void> removeTrack(String accessToken, String playlistId, String trackUri) async {
+  Future<bool> removeTrack(String accessToken, String playlistId, String trackUri) async {
     try {
       await _client.removeTracksFromPlaylist(
         accessToken,
         playlistId: playlistId,
         trackUris: [trackUri],
       );
+      return true;
     } catch (e) {
       debugPrint('Remove from playlist failed: $e');
+      return false;
     }
   }
 

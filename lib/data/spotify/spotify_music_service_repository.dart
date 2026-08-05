@@ -254,51 +254,56 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
   @override
   Future<LikeResult> likeTrack(TrackInfo trackInfo) async {
     final accessToken = await _ensureAccessToken();
+    final ruleConfig = await _settingsRepository.loadRuleConfig();
 
     // 1. Like the track
     await _spotifyClient.likeTrack(trackId: trackInfo.trackId, accessToken: accessToken);
 
     // 3. Remove from archive playlist (non-blocking)
     var removedFromArchive = false;
-    try {
-      final archiveName = await _settingsRepository.loadArchivePlaylistName();
-      if (archiveName.isNotEmpty) {
-        final archiveId = await _playlistService.findPlaylistByName(accessToken, archiveName);
+    if (ruleConfig.archiveRemoveEnabled && ruleConfig.archivePlaylistName.isNotEmpty) {
+      try {
+        final archiveId = await _playlistService.findPlaylistByName(
+          accessToken,
+          ruleConfig.archivePlaylistName,
+        );
         if (archiveId != null) {
-          await _playlistService.removeTrack(accessToken, archiveId, trackInfo.trackUri);
-          removedFromArchive = true;
+          removedFromArchive = await _playlistService.removeTrack(
+            accessToken,
+            archiveId,
+            trackInfo.trackUri,
+          );
         }
+      } catch (e) {
+        debugPrint('Archive removal failed: $e');
       }
-    } catch (e) {
-      debugPrint('Archive removal failed: $e');
     }
 
-    // 4. Increment like count
+    // 4. Increment like count (always, regardless of best-of rule state)
     final trackLikeCount = await _likeCountRepository.incrementTrackLikeCount(trackInfo.trackId);
 
-    // 5. Add to best-of playlist at 3 likes
+    // 5. Add to best-of playlist at configured threshold
     var addedToBestOf = false;
-    if (trackLikeCount == 3) {
+    if (ruleConfig.bestOfEnabled &&
+        trackLikeCount == ruleConfig.bestOfThreshold &&
+        ruleConfig.bestOfPlaylistName.isNotEmpty) {
       try {
-        final bestOfName = await _settingsRepository.loadBestOfPlaylistName();
-        if (bestOfName.isNotEmpty) {
-          final bestOfId = await _playlistService.ensurePlaylist(accessToken, bestOfName);
-          if (bestOfId != null) {
-            await _playlistService.addTrack(accessToken, bestOfId, trackInfo.trackUri);
-            addedToBestOf = true;
-          }
+        final bestOfId = await _playlistService.ensurePlaylist(accessToken, ruleConfig.bestOfPlaylistName);
+        if (bestOfId != null) {
+          await _playlistService.addTrack(accessToken, bestOfId, trackInfo.trackUri);
+          addedToBestOf = true;
         }
       } catch (e) {
         debugPrint('Best-of add failed: $e');
       }
     }
 
-    // 6. Increment artist like counts and auto-follow at threshold
+    // 6. Increment artist like counts (always) and auto-follow at configured threshold
     final followedArtistNames = <String>[];
     for (var i = 0; i < trackInfo.artistIds.length; i++) {
       final artistId = trackInfo.artistIds[i];
       final artistCount = await _likeCountRepository.incrementArtistLikeCount(artistId);
-      if (artistCount == 5) {
+      if (ruleConfig.followArtistEnabled && artistCount == ruleConfig.followArtistThreshold) {
         try {
           await _spotifyClient.followArtists(accessToken, artistIds: [artistId]);
           final name = i < trackInfo.artistNames.length ? trackInfo.artistNames[i] : artistId;

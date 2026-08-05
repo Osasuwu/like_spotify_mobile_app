@@ -1,3 +1,4 @@
+import '../entities/rule_config.dart';
 import '../entities/trigger_config.dart';
 
 abstract class PlatformServiceRepository {
@@ -15,10 +16,7 @@ abstract class PlatformServiceRepository {
   Future<void> openMiuiAutostartSettings();
   Future<bool> isSpotifyInstalled();
   Future<bool> openSpotify();
-  Future<void> updatePlaylistRules({
-    required String archivePlaylistName,
-    required String bestOfPlaylistName,
-  });
+  Future<void> updateRuleConfig(RuleConfig config);
   Stream<Map<String, dynamic>> events();
   Future<void> syncSpotifyTokens({
     required String accessToken,

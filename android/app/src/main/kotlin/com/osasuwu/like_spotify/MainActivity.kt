@@ -14,9 +14,6 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
-private const val DEFAULT_ARCHIVE_PLAYLIST_NAME = "Discover Weekly Archive"
-private const val DEFAULT_BEST_OF_PLAYLIST_NAME = "Botbotb(Best of the best of the best)"
-
 class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 	private var eventSink: EventChannel.EventSink? = null
 	private var localReceiver: BroadcastReceiver? = null
@@ -35,7 +32,6 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 			flutterEngine.dartExecutor.binaryMessenger,
 			AppConstants.CHANNEL_SERVICE
 		).setMethodCallHandler { call, result ->
-			ensurePlaylistRuleDefaults()
 			when (call.method) {
 				"startService" -> {
 					startListenerService()
@@ -154,17 +150,31 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 					}
 				}
 
-				"setPlaylistRules" -> {
+				"setRuleConfig" -> {
+					val archiveRemoveEnabled = call.argument<Boolean>("archiveRemoveEnabled") ?: true
 					val archiveName = call.argument<String>("archivePlaylistName")
 						?.takeIf { it.isNotBlank() }
-						?: DEFAULT_ARCHIVE_PLAYLIST_NAME
+						?: AppConstants.DEFAULT_ARCHIVE_PLAYLIST_NAME
+					val bestOfEnabled = call.argument<Boolean>("bestOfEnabled") ?: true
 					val bestOfName = call.argument<String>("bestOfPlaylistName")
 						?.takeIf { it.isNotBlank() }
-						?: DEFAULT_BEST_OF_PLAYLIST_NAME
+						?: AppConstants.DEFAULT_BEST_OF_PLAYLIST_NAME
+					val bestOfThreshold = call.argument<Int>("bestOfThreshold")
+						?.takeIf { it >= 1 }
+						?: AppConstants.DEFAULT_BEST_OF_THRESHOLD
+					val followArtistEnabled = call.argument<Boolean>("followArtistEnabled") ?: true
+					val followArtistThreshold = call.argument<Int>("followArtistThreshold")
+						?.takeIf { it >= 1 }
+						?: AppConstants.DEFAULT_FOLLOW_ARTIST_THRESHOLD
 
 					prefs().edit()
-						.putString(AppConstants.KEY_ARCHIVE_PLAYLIST_NAME, archiveName)
-						.putString(AppConstants.KEY_BEST_OF_PLAYLIST_NAME, bestOfName)
+						.putBoolean(AppConstants.KEY_RULE_ARCHIVE_REMOVE_ENABLED, archiveRemoveEnabled)
+						.putString(AppConstants.KEY_RULE_ARCHIVE_PLAYLIST_NAME, archiveName)
+						.putBoolean(AppConstants.KEY_RULE_BEST_OF_ENABLED, bestOfEnabled)
+						.putString(AppConstants.KEY_RULE_BEST_OF_PLAYLIST_NAME, bestOfName)
+						.putInt(AppConstants.KEY_RULE_BEST_OF_THRESHOLD, bestOfThreshold)
+						.putBoolean(AppConstants.KEY_RULE_FOLLOW_ARTIST_ENABLED, followArtistEnabled)
+						.putInt(AppConstants.KEY_RULE_FOLLOW_ARTIST_THRESHOLD, followArtistThreshold)
 						.apply()
 					result.success(true)
 				}
@@ -265,16 +275,4 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 	}
 
 	private fun prefs() = getSharedPreferences(AppConstants.PREFS, Context.MODE_PRIVATE)
-
-	private fun ensurePlaylistRuleDefaults() {
-		val p = prefs()
-		if (p.getString(AppConstants.KEY_ARCHIVE_PLAYLIST_NAME, null) == null ||
-			p.getString(AppConstants.KEY_BEST_OF_PLAYLIST_NAME, null) == null
-		) {
-			p.edit()
-				.putString(AppConstants.KEY_ARCHIVE_PLAYLIST_NAME, DEFAULT_ARCHIVE_PLAYLIST_NAME)
-				.putString(AppConstants.KEY_BEST_OF_PLAYLIST_NAME, DEFAULT_BEST_OF_PLAYLIST_NAME)
-				.apply()
-		}
-	}
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/entities/rule_config.dart';
 import '../../domain/entities/trigger_config.dart';
 import '../state/app_providers.dart';
 
@@ -17,17 +18,30 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
   late TextEditingController _debounce;
   late TextEditingController _archivePlaylistName;
   late TextEditingController _bestOfPlaylistName;
+  late TextEditingController _bestOfThreshold;
+  late TextEditingController _followArtistThreshold;
+
+  late bool _archiveRemoveEnabled;
+  late bool _bestOfEnabled;
+  late bool _followArtistEnabled;
 
   @override
   void initState() {
     super.initState();
-    final config = ref.read(appControllerProvider).triggerConfig;
     final state = ref.read(appControllerProvider);
+    final config = state.triggerConfig;
+    final ruleConfig = state.ruleConfig;
     _pattern = TextEditingController(text: config.pattern);
     _window = TextEditingController(text: config.windowMs.toString());
     _debounce = TextEditingController(text: config.debounceMs.toString());
-    _archivePlaylistName = TextEditingController(text: state.archivePlaylistName);
-    _bestOfPlaylistName = TextEditingController(text: state.bestOfPlaylistName);
+    _archivePlaylistName = TextEditingController(text: ruleConfig.archivePlaylistName);
+    _bestOfPlaylistName = TextEditingController(text: ruleConfig.bestOfPlaylistName);
+    _bestOfThreshold = TextEditingController(text: ruleConfig.bestOfThreshold.toString());
+    _followArtistThreshold =
+        TextEditingController(text: ruleConfig.followArtistThreshold.toString());
+    _archiveRemoveEnabled = ruleConfig.archiveRemoveEnabled;
+    _bestOfEnabled = ruleConfig.bestOfEnabled;
+    _followArtistEnabled = ruleConfig.followArtistEnabled;
   }
 
   @override
@@ -37,6 +51,8 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
     _debounce.dispose();
     _archivePlaylistName.dispose();
     _bestOfPlaylistName.dispose();
+    _bestOfThreshold.dispose();
+    _followArtistThreshold.dispose();
     super.dispose();
   }
 
@@ -48,7 +64,7 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
       appBar: AppBar(title: const Text('Trigger configuration')),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
+        child: ListView(
           children: <Widget>[
             const Text(
               'Pattern format: comma separated events using play/pause.\nDefault: pause,play in 1000ms.',
@@ -68,20 +84,55 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
               decoration: const InputDecoration(labelText: 'Debounce (ms)'),
               keyboardType: TextInputType.number,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
+            const Divider(),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Remove from archive playlist'),
+              value: _archiveRemoveEnabled,
+              onChanged: (value) => setState(() => _archiveRemoveEnabled = value),
+            ),
             TextField(
               controller: _archivePlaylistName,
+              enabled: _archiveRemoveEnabled,
               decoration: const InputDecoration(
                 labelText: 'Archive playlist name',
                 hintText: 'Discover Weekly Archive',
               ),
             ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Promote to best-of playlist'),
+              value: _bestOfEnabled,
+              onChanged: (value) => setState(() => _bestOfEnabled = value),
+            ),
             TextField(
               controller: _bestOfPlaylistName,
+              enabled: _bestOfEnabled,
               decoration: const InputDecoration(
                 labelText: 'Best-of playlist name',
                 hintText: 'Botbotb(Best of the best of the best)',
               ),
+            ),
+            TextField(
+              controller: _bestOfThreshold,
+              enabled: _bestOfEnabled,
+              decoration: const InputDecoration(labelText: 'Best-of threshold (likes)'),
+              keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Auto-follow artist'),
+              value: _followArtistEnabled,
+              onChanged: (value) => setState(() => _followArtistEnabled = value),
+            ),
+            TextField(
+              controller: _followArtistThreshold,
+              enabled: _followArtistEnabled,
+              decoration: const InputDecoration(labelText: 'Follow-artist threshold (likes)'),
+              keyboardType: TextInputType.number,
             ),
             const SizedBox(height: 20),
             FilledButton(
@@ -91,14 +142,24 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
                   windowMs: int.tryParse(_window.text.trim()) ?? 1000,
                   debounceMs: int.tryParse(_debounce.text.trim()) ?? 650,
                 );
-                await controller.saveTriggerConfig(config);
-                await controller.savePlaylistRules(
+                final ruleConfig = RuleConfig(
+                  archiveRemoveEnabled: _archiveRemoveEnabled,
                   archivePlaylistName: _archivePlaylistName.text.trim(),
+                  bestOfEnabled: _bestOfEnabled,
                   bestOfPlaylistName: _bestOfPlaylistName.text.trim(),
+                  bestOfThreshold: int.tryParse(_bestOfThreshold.text.trim()) ?? 3,
+                  followArtistEnabled: _followArtistEnabled,
+                  followArtistThreshold:
+                      int.tryParse(_followArtistThreshold.text.trim()) ?? 5,
                 );
+                await controller.saveTriggerConfig(config);
+                await controller.saveRuleConfig(ruleConfig);
                 if (!context.mounted) return;
+                final error = ref.read(appControllerProvider).lastError;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Trigger configuration saved')),
+                  SnackBar(
+                    content: Text(error ?? 'Trigger configuration saved'),
+                  ),
                 );
               },
               child: const Text('Save'),
