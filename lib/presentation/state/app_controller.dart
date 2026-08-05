@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/app_constants.dart';
+import '../../data/spotify/spotify_client.dart';
 import '../../data/spotify/spotify_music_service_repository.dart';
 import '../../domain/entities/app_log.dart';
 import '../../domain/entities/pending_like.dart';
@@ -85,9 +86,7 @@ class AppController extends StateNotifier<AppState> {
         isMiui: isMiui,
         spotifyInstalled: spotifyInstalled,
         ruleConfig: ruleConfig,
-        logs: logLines
-            .map((line) => AppLog(at: DateTime.now().toUtc(), message: line))
-            .toList(growable: false),
+        logs: logLines,
       );
 
       // Load pending likes count
@@ -120,7 +119,11 @@ class AppController extends StateNotifier<AppState> {
       }
       await _settingsRepository.saveServiceEnabled(enabled);
       state = state.copyWith(serviceEnabled: enabled, clearError: true);
-      await addLog('Service ${enabled ? 'enabled' : 'disabled'}');
+      await addLog(
+        actionType: 'service_toggle',
+        result: LogResult.success,
+        message: 'Service ${enabled ? 'enabled' : 'disabled'}',
+      );
     } catch (error) {
       state = state.copyWith(lastError: error.toString());
     }
@@ -129,28 +132,52 @@ class AppController extends StateNotifier<AppState> {
   Future<void> ensureRuntimePermissions() async {
     final notificationStatus = await Permission.notification.status;
     if (notificationStatus.isGranted) {
-      await addLog('Notification permission already granted');
+      await addLog(
+        actionType: 'permission_notification',
+        result: LogResult.info,
+        message: 'Notification permission already granted',
+      );
       return;
     }
 
     final requested = await Permission.notification.request();
     if (requested.isGranted) {
-      await addLog('Notification permission granted');
+      await addLog(
+        actionType: 'permission_notification',
+        result: LogResult.success,
+        message: 'Notification permission granted',
+      );
     } else if (requested.isPermanentlyDenied) {
-      await addLog('Notification permission permanently denied; opening app settings');
+      await addLog(
+        actionType: 'permission_notification',
+        result: LogResult.failure,
+        message: 'Notification permission permanently denied; opening app settings',
+      );
       await _platformServiceRepository.openNotificationSettings();
     } else {
-      await addLog('Notification permission denied');
+      await addLog(
+        actionType: 'permission_notification',
+        result: LogResult.failure,
+        message: 'Notification permission denied',
+      );
     }
   }
 
   Future<void> connectSpotify() async {
     try {
       if (!state.spotifyInstalled) {
-        await addLog('Spotify app is not installed.');
+        await addLog(
+          actionType: 'spotify_connect',
+          result: LogResult.failure,
+          message: 'Spotify app is not installed.',
+        );
       }
       await _musicServiceRepository.connectSpotify();
-      await addLog('Waiting for Spotify OAuth callback...');
+      await addLog(
+        actionType: 'spotify_connect',
+        result: LogResult.info,
+        message: 'Waiting for Spotify OAuth callback...',
+      );
     } catch (error) {
       state = state.copyWith(lastError: error.toString());
     }
@@ -162,14 +189,22 @@ class AppController extends StateNotifier<AppState> {
       authState: const SpotifyAuthState.disconnected(),
       clearError: true,
     );
-    await addLog('Spotify disconnected');
+    await addLog(
+      actionType: 'spotify_disconnect',
+      result: LogResult.success,
+      message: 'Spotify disconnected',
+    );
   }
 
   Future<void> saveTriggerConfig(TriggerConfig config) async {
     await _settingsRepository.saveTriggerConfig(config);
     await _platformServiceRepository.updateTriggerConfig(config);
     state = state.copyWith(triggerConfig: config, clearError: true);
-    await addLog('Trigger config updated to ${config.pattern} (${config.windowMs}ms)');
+    await addLog(
+      actionType: 'trigger_config',
+      result: LogResult.success,
+      message: 'Trigger config updated to ${config.pattern} (${config.windowMs}ms)',
+    );
   }
 
   Future<void> saveRuleConfig(RuleConfig config) async {
@@ -185,7 +220,11 @@ class AppController extends StateNotifier<AppState> {
     await _settingsRepository.saveRuleConfig(normalized);
     await _platformServiceRepository.updateRuleConfig(normalized);
     state = state.copyWith(ruleConfig: normalized, clearError: true);
-    await addLog('Rule config updated');
+    await addLog(
+      actionType: 'rule_config',
+      result: LogResult.success,
+      message: 'Rule config updated',
+    );
   }
 
   Future<void> requestBatteryOptimizationExemption() async {
@@ -207,14 +246,22 @@ class AppController extends StateNotifier<AppState> {
 
   Future<void> openNotificationListenerSettings() async {
     await _platformServiceRepository.openNotificationListenerSettings();
-    await addLog('Opened notification access settings; enable access and tap refresh');
+    await addLog(
+      actionType: 'notification_listener',
+      result: LogResult.info,
+      message: 'Opened notification access settings; enable access and tap refresh',
+    );
   }
 
   Future<void> refreshNotificationListenerStatus() async {
     final enabled = await _platformServiceRepository.isNotificationListenerEnabled();
     state = state.copyWith(notificationListenerEnabled: enabled);
     if (!enabled) {
-      await addLog('Notification access is disabled; playback-state fallback is unavailable');
+      await addLog(
+        actionType: 'notification_listener',
+        result: LogResult.failure,
+        message: 'Notification access is disabled; playback-state fallback is unavailable',
+      );
     }
   }
 
@@ -228,19 +275,41 @@ class AppController extends StateNotifier<AppState> {
       state = state.copyWith(clearError: true, clearLikeResult: true, liking: true);
       final result = await _musicServiceRepository.likeCurrentTrack();
       state = state.copyWith(lastLikeResult: result, liking: false);
-      await addLog('Liked: ${result.trackName} (x${result.trackLikeCount})');
+      await addLog(
+        actionType: 'like_track',
+        targetId: result.trackName,
+        result: LogResult.success,
+        message: 'Liked: ${result.trackName} (x${result.trackLikeCount})',
+      );
       if (result.removedFromArchive) {
-        await addLog('Removed from archive playlist');
+        await addLog(
+          actionType: 'archive_remove',
+          result: LogResult.success,
+          message: 'Removed from archive playlist',
+        );
       }
       if (result.addedToBestOf) {
-        await addLog('Added to best-of playlist');
+        await addLog(
+          actionType: 'best_of_add',
+          result: LogResult.success,
+          message: 'Added to best-of playlist',
+        );
       }
       if (result.followedArtistNames.isNotEmpty) {
-        await addLog('Auto-followed: ${result.followedArtistNames.join(", ")}');
+        await addLog(
+          actionType: 'follow_artist',
+          result: LogResult.success,
+          message: 'Auto-followed: ${result.followedArtistNames.join(", ")}',
+        );
       }
     } catch (error) {
       state = state.copyWith(lastError: error.toString(), liking: false);
-      await addLog('Like command failed: $error');
+      await addLog(
+        actionType: 'like_track',
+        result: LogResult.failure,
+        httpCode: error is SpotifyApiException ? error.statusCode : null,
+        message: 'Like command failed: $error',
+      );
       // Try to queue for offline retry — we need the track info.
       // If we can still reach Spotify to get current track, queue it.
       await _tryQueueCurrentTrack();
@@ -268,10 +337,18 @@ class AppController extends StateNotifier<AppState> {
     final pending = await _settingsRepository.loadPendingLikes();
     if (pending.isEmpty) return;
 
-    await addLog('Online — processing ${pending.length} queued like(s)...');
+    await addLog(
+      actionType: 'process_pending',
+      result: LogResult.info,
+      message: 'Online — processing ${pending.length} queued like(s)...',
+    );
     final processed = await _musicServiceRepository.processPendingLikes(pending);
     if (processed > 0) {
-      await addLog('Processed $processed queued like(s)');
+      await addLog(
+        actionType: 'process_pending',
+        result: LogResult.success,
+        message: 'Processed $processed queued like(s)',
+      );
       final remaining = await _settingsRepository.loadPendingLikes();
       state = state.copyWith(pendingLikesCount: remaining.length);
     }
@@ -289,7 +366,12 @@ class AppController extends StateNotifier<AppState> {
     await _settingsRepository.addPendingLike(pending);
     final count = (await _settingsRepository.loadPendingLikes()).length;
     state = state.copyWith(pendingLikesCount: count);
-    await addLog('Queued for later: ${trackInfo.trackName}');
+    await addLog(
+      actionType: 'queue_pending',
+      targetId: trackInfo.trackId,
+      result: LogResult.info,
+      message: 'Queued for later: ${trackInfo.trackName}',
+    );
   }
 
   Future<void> clearLogs() async {
@@ -297,14 +379,23 @@ class AppController extends StateNotifier<AppState> {
     state = state.copyWith(logs: <AppLog>[]);
   }
 
-  Future<void> addLog(String message) async {
-    await _settingsRepository.appendLog(message);
+  Future<void> addLog({
+    required String actionType,
+    String? targetId,
+    LogResult result = LogResult.info,
+    int? httpCode,
+    required String message,
+  }) async {
+    await _settingsRepository.appendLog(AppLog(
+      at: DateTime.now().toUtc(),
+      actionType: actionType,
+      targetId: targetId,
+      result: result,
+      httpCode: httpCode,
+      message: message,
+    ));
     final logs = await _settingsRepository.loadLogs();
-    state = state.copyWith(
-      logs: logs
-          .map((line) => AppLog(at: DateTime.now().toUtc(), message: line))
-          .toList(growable: false),
-    );
+    state = state.copyWith(logs: logs);
   }
 
   Future<void> _onIncomingLink(Uri uri) async {
@@ -315,7 +406,11 @@ class AppController extends StateNotifier<AppState> {
         if (handled) {
           final auth = await repository.getAuthState();
           state = state.copyWith(authState: auth, clearError: true);
-          await addLog('Spotify connected successfully');
+          await addLog(
+            actionType: 'oauth_callback',
+            result: LogResult.success,
+            message: 'Spotify connected successfully',
+          );
         }
       }
     } catch (error) {
@@ -333,12 +428,22 @@ class AppController extends StateNotifier<AppState> {
     }
 
     if (type == 'log' && value is String) {
-      unawaited(addLog('[native] $value'));
+      unawaited(addLog(
+        actionType: event['actionType'] as String? ?? 'native',
+        targetId: event['targetId'] as String?,
+        result: LogResult.fromName(event['result'] as String?),
+        httpCode: event['httpCode'] as int?,
+        message: value,
+      ));
       return;
     }
 
     if (type == 'media' && value is String) {
-      unawaited(addLog('Media event: $value'));
+      unawaited(addLog(
+        actionType: 'media_event',
+        result: LogResult.info,
+        message: 'Media event: $value',
+      ));
       return;
     }
 
@@ -356,20 +461,42 @@ class AppController extends StateNotifier<AppState> {
 
       await _platformServiceRepository.playFeedbackTone(success: result.success);
 
-      await addLog('Liked: ${result.trackName} (x${result.trackLikeCount})');
+      await addLog(
+        actionType: 'like_track',
+        targetId: result.trackName,
+        result: LogResult.success,
+        message: 'Liked: ${result.trackName} (x${result.trackLikeCount})',
+      );
       if (result.removedFromArchive) {
-        await addLog('Removed from archive playlist');
+        await addLog(
+          actionType: 'archive_remove',
+          result: LogResult.success,
+          message: 'Removed from archive playlist',
+        );
       }
       if (result.addedToBestOf) {
-        await addLog('Added to best-of playlist');
+        await addLog(
+          actionType: 'best_of_add',
+          result: LogResult.success,
+          message: 'Added to best-of playlist',
+        );
       }
       if (result.followedArtistNames.isNotEmpty) {
-        await addLog('Auto-followed: ${result.followedArtistNames.join(", ")}');
+        await addLog(
+          actionType: 'follow_artist',
+          result: LogResult.success,
+          message: 'Auto-followed: ${result.followedArtistNames.join(", ")}',
+        );
       }
     } catch (error) {
       state = state.copyWith(lastError: error.toString(), liking: false);
       await _platformServiceRepository.playFeedbackTone(success: false);
-      await addLog('Like from trigger failed: $error');
+      await addLog(
+        actionType: 'like_track',
+        result: LogResult.failure,
+        httpCode: error is SpotifyApiException ? error.statusCode : null,
+        message: 'Like from trigger failed: $error',
+      );
       await _tryQueueCurrentTrack();
     }
   }

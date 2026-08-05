@@ -42,6 +42,10 @@ object AppConstants {
     const val EXTRA_EVENT = "event"
     const val EXTRA_LOG = "log"
     const val EXTRA_ACTIVE = "active"
+    const val EXTRA_LOG_ACTION_TYPE = "log_action_type"
+    const val EXTRA_LOG_TARGET_ID = "log_target_id"
+    const val EXTRA_LOG_RESULT = "log_result"
+    const val EXTRA_LOG_HTTP_CODE = "log_http_code"
 
     const val CHANNEL_SERVICE = "like_spotify_mobile_app/service"
     const val CHANNEL_EVENTS = "like_spotify_mobile_app/events"

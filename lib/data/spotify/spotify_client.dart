@@ -80,7 +80,7 @@ class SpotifyClient {
     ).timeout(_timeout);
 
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify token exchange failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify token exchange failed');
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -108,7 +108,7 @@ class SpotifyClient {
     ).timeout(_timeout);
 
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify token refresh failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify token refresh failed');
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -130,8 +130,9 @@ class SpotifyClient {
     }
 
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception(
-        'Spotify current track failed (${response.statusCode}): ${response.body}',
+      throw SpotifyApiException(
+        response.statusCode,
+        'Spotify current track failed: ${response.body}',
       );
     }
 
@@ -150,7 +151,7 @@ class SpotifyClient {
     ).timeout(_timeout);
 
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify like track failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify like track failed');
     }
   }
 
@@ -168,7 +169,7 @@ class SpotifyClient {
     }
 
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify current track failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify current track failed');
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -222,7 +223,7 @@ class SpotifyClient {
       headers: <String, String>{'Authorization': 'Bearer $accessToken'},
     ).timeout(_timeout);
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify get playlists failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify get playlists failed');
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     final items = json['items'] as List<dynamic>? ?? <dynamic>[];
@@ -260,7 +261,7 @@ class SpotifyClient {
       }),
     ).timeout(_timeout);
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify create playlist failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify create playlist failed');
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     return json['id'] as String;
@@ -281,7 +282,7 @@ class SpotifyClient {
       body: jsonEncode(<String, dynamic>{'uris': trackUris}),
     ).timeout(_timeout);
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify add to playlist failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify add to playlist failed');
     }
   }
 
@@ -303,7 +304,7 @@ class SpotifyClient {
 
     final streamed = await _http.send(request).timeout(_timeout);
     if (streamed.statusCode < 200 || streamed.statusCode > 299) {
-      throw Exception('Spotify remove from playlist failed (${streamed.statusCode})');
+      throw SpotifyApiException(streamed.statusCode, 'Spotify remove from playlist failed');
     }
   }
 
@@ -319,7 +320,7 @@ class SpotifyClient {
       headers: <String, String>{'Authorization': 'Bearer $accessToken'},
     ).timeout(_timeout);
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify follow artists failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify follow artists failed');
     }
   }
 
@@ -334,7 +335,7 @@ class SpotifyClient {
       headers: <String, String>{'Authorization': 'Bearer $accessToken'},
     ).timeout(_timeout);
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw Exception('Spotify get saved tracks failed (${response.statusCode})');
+      throw SpotifyApiException(response.statusCode, 'Spotify get saved tracks failed');
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     final items = json['items'] as List<dynamic>? ?? <dynamic>[];
@@ -362,10 +363,20 @@ class SpotifyClient {
   }
 }
 
-/// Thrown when Spotify returns 401, signaling the caller should refresh and retry.
-class SpotifyAuthException implements Exception {
+/// Thrown when a Spotify API call returns a non-2xx response, carrying the
+/// real HTTP status code so callers/logs can surface it instead of just the
+/// message text.
+class SpotifyApiException implements Exception {
+  final int statusCode;
   final String message;
-  SpotifyAuthException(this.message);
+  SpotifyApiException(this.statusCode, this.message);
+  @override
+  String toString() => 'SpotifyApiException($statusCode): $message';
+}
+
+/// Thrown when Spotify returns 401, signaling the caller should refresh and retry.
+class SpotifyAuthException extends SpotifyApiException {
+  SpotifyAuthException(String message) : super(401, message);
   @override
   String toString() => 'SpotifyAuthException: $message';
 }

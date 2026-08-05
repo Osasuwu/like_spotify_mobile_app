@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/entities/app_log.dart';
 import '../state/app_providers.dart';
 
 class LogsScreen extends ConsumerWidget {
@@ -28,9 +29,27 @@ class LogsScreen extends ConsumerWidget {
               separatorBuilder: (_, index) => const Divider(height: 1),
               itemBuilder: (context, index) {
                 final log = logs[index];
+                final subtitleParts = <String>[
+                  log.actionType,
+                  if (log.targetId != null) log.targetId!,
+                  if (log.httpCode != null) 'HTTP ${log.httpCode}',
+                ];
                 return ListTile(
                   dense: true,
+                  leading: Icon(
+                    switch (log.result) {
+                      LogResult.success => Icons.check_circle_outline,
+                      LogResult.failure => Icons.error_outline,
+                      LogResult.info => Icons.info_outline,
+                    },
+                    color: switch (log.result) {
+                      LogResult.success => Colors.green,
+                      LogResult.failure => Colors.red,
+                      LogResult.info => Colors.grey,
+                    },
+                  ),
                   title: Text(log.message),
+                  subtitle: Text(subtitleParts.join(' · ')),
                 );
               },
             ),

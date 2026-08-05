@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../domain/entities/app_log.dart';
 import '../../domain/entities/like_result.dart';
 import '../../domain/entities/pending_like.dart';
 import '../../domain/entities/spotify_auth_state.dart';
@@ -276,6 +277,14 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
         }
       } catch (e) {
         debugPrint('Archive removal failed: $e');
+        await _settingsRepository.appendLog(AppLog(
+          at: DateTime.now().toUtc(),
+          actionType: 'archive_remove',
+          targetId: trackInfo.trackId,
+          result: LogResult.failure,
+          httpCode: e is SpotifyApiException ? e.statusCode : null,
+          message: 'Archive removal failed: $e',
+        ));
       }
     }
 
@@ -295,6 +304,14 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
         }
       } catch (e) {
         debugPrint('Best-of add failed: $e');
+        await _settingsRepository.appendLog(AppLog(
+          at: DateTime.now().toUtc(),
+          actionType: 'best_of_add',
+          targetId: trackInfo.trackId,
+          result: LogResult.failure,
+          httpCode: e is SpotifyApiException ? e.statusCode : null,
+          message: 'Best-of add failed: $e',
+        ));
       }
     }
 
@@ -310,6 +327,14 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
           followedArtistNames.add(name);
         } catch (e) {
           debugPrint('Artist follow failed for $artistId: $e');
+          await _settingsRepository.appendLog(AppLog(
+            at: DateTime.now().toUtc(),
+            actionType: 'follow_artist',
+            targetId: artistId,
+            result: LogResult.failure,
+            httpCode: e is SpotifyApiException ? e.statusCode : null,
+            message: 'Artist follow failed for $artistId: $e',
+          ));
         }
       }
     }

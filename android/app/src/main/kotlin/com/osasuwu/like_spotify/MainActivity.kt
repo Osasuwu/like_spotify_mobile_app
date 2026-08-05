@@ -216,7 +216,14 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 
 					AppConstants.ACTION_LOG_EVENT -> {
 						val value = intent.getStringExtra(AppConstants.EXTRA_LOG) ?: return
-						eventSink?.success(mapOf("type" to "log", "value" to value))
+						val payload = mutableMapOf<String, Any?>("type" to "log", "value" to value)
+						intent.getStringExtra(AppConstants.EXTRA_LOG_ACTION_TYPE)?.let { payload["actionType"] = it }
+						intent.getStringExtra(AppConstants.EXTRA_LOG_TARGET_ID)?.let { payload["targetId"] = it }
+						intent.getStringExtra(AppConstants.EXTRA_LOG_RESULT)?.let { payload["result"] = it }
+						if (intent.hasExtra(AppConstants.EXTRA_LOG_HTTP_CODE)) {
+							payload["httpCode"] = intent.getIntExtra(AppConstants.EXTRA_LOG_HTTP_CODE, 0)
+						}
+						eventSink?.success(payload)
 					}
 
 					AppConstants.ACTION_SERVICE_STATE -> {

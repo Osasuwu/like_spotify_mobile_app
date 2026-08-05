@@ -114,9 +114,11 @@ class PlaybackNotificationListenerService : NotificationListenerService() {
         }
     }
 
-    private fun log(message: String) {
+    private fun log(message: String, actionType: String = "notification_listener", result: String = "info") {
         val intent = android.content.Intent(AppConstants.ACTION_LOG_EVENT)
             .putExtra(AppConstants.EXTRA_LOG, message)
+            .putExtra(AppConstants.EXTRA_LOG_ACTION_TYPE, actionType)
+            .putExtra(AppConstants.EXTRA_LOG_RESULT, result)
         androidx.localbroadcastmanager.content.LocalBroadcastManager
             .getInstance(this)
             .sendBroadcast(intent)

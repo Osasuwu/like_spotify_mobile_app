@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_constants.dart';
+import '../../domain/entities/app_log.dart';
 import '../../domain/entities/pending_like.dart';
 import '../../domain/entities/rule_config.dart';
 import '../../domain/entities/trigger_config.dart';
@@ -83,8 +84,13 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
   }
 
   @override
-  Future<List<String>> loadLogs() async {
+  Future<List<AppLog>> loadLogs() async {
     final prefs = await SharedPreferences.getInstance();
+    final lines = await _loadRawLogLines(prefs);
+    return lines.map(AppLog.fromLine).toList(growable: false);
+  }
+
+  Future<List<String>> _loadRawLogLines(SharedPreferences prefs) async {
     final raw = prefs.getStringList(_keyLogs);
     if (raw != null) {
       return raw;
@@ -97,11 +103,11 @@ class SharedPrefsSettingsRepository implements SettingsRepository {
   }
 
   @override
-  Future<void> appendLog(String message) async {
+  Future<void> appendLog(AppLog log) async {
     final prefs = await SharedPreferences.getInstance();
-    final logs = await loadLogs();
-    logs.insert(0, '[${DateTime.now().toIso8601String()}] $message');
-    final clipped = logs.take(300).toList(growable: false);
+    final lines = await _loadRawLogLines(prefs);
+    lines.insert(0, log.toLine());
+    final clipped = lines.take(300).toList(growable: false);
     await prefs.setStringList(_keyLogs, clipped);
   }
 
