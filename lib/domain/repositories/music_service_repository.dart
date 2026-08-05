@@ -11,4 +11,5 @@ abstract class MusicServiceRepository {
   Future<LikeResult> likeTrack(TrackInfo trackInfo);
   Future<void> refreshIfNeeded();
   Future<int> processPendingLikes(List<PendingLike> pending);
+  Future<Map<String, Map<String, int>>> loadAllLikeCounts();
 }

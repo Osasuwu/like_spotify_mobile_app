@@ -372,6 +372,14 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
     return processed;
   }
 
+  @override
+  Future<Map<String, Map<String, int>>> loadAllLikeCounts() async {
+    return <String, Map<String, int>>{
+      'tracks': await _likeCountRepository.loadAllTrackLikeCounts(),
+      'artists': await _likeCountRepository.loadAllArtistLikeCounts(),
+    };
+  }
+
   /// Expose playlist service's cached user ID for Supabase like counting.
   String? get cachedUserId => _playlistService.cachedUserId;
 }

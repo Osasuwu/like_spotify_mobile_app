@@ -17,7 +17,13 @@ class LogsScreen extends ConsumerWidget {
         title: const Text('Logs / debug'),
         actions: <Widget>[
           IconButton(
+            onPressed: controller.exportDiagnostics,
+            tooltip: 'Export diagnostics',
+            icon: const Icon(Icons.ios_share),
+          ),
+          IconButton(
             onPressed: controller.clearLogs,
+            tooltip: 'Clear logs',
             icon: const Icon(Icons.delete_outline),
           ),
         ],
