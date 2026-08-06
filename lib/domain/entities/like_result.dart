@@ -7,6 +7,7 @@ class LikeResult {
   final List<String> followedArtistNames;
   final int trackLikeCount;
   final String? errorMessage;
+  final bool skippedCooldown;
 
   const LikeResult({
     required this.trackId,
@@ -17,6 +18,7 @@ class LikeResult {
     this.followedArtistNames = const <String>[],
     this.trackLikeCount = 0,
     this.errorMessage,
+    this.skippedCooldown = false,
   });
 
   bool get success => trackLiked && errorMessage == null;

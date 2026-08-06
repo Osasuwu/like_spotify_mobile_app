@@ -54,6 +54,14 @@ class SupabaseLikeCountRepository implements LikeCountRepository {
   Future<Map<String, int>> loadAllArtistLikeCounts() =>
       _local.loadAllArtistLikeCounts();
 
+  @override
+  Future<DateTime?> getLastLikedAt(String trackId) =>
+      _local.getLastLikedAt(trackId);
+
+  @override
+  Future<void> recordLikedAt(String trackId, DateTime at) =>
+      _local.recordLikedAt(trackId, at);
+
   Future<int?> _supabaseIncrement(String userId, String trackId) async {
     try {
       final response = await http.post(

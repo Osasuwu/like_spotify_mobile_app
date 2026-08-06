@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/app_constants.dart';
 import '../../domain/entities/rule_config.dart';
 import '../../domain/entities/trigger_config.dart';
 import '../state/app_providers.dart';
@@ -20,10 +21,12 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
   late TextEditingController _bestOfPlaylistName;
   late TextEditingController _bestOfThreshold;
   late TextEditingController _followArtistThreshold;
+  late TextEditingController _likeCooldownMinutes;
 
   late bool _archiveRemoveEnabled;
   late bool _bestOfEnabled;
   late bool _followArtistEnabled;
+  late bool _likeCooldownEnabled;
   late int _feedbackVolume;
 
   @override
@@ -41,9 +44,11 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
     _bestOfThreshold = TextEditingController(text: ruleConfig.bestOfThreshold.toString());
     _followArtistThreshold =
         TextEditingController(text: ruleConfig.followArtistThreshold.toString());
+    _likeCooldownMinutes = TextEditingController(text: ruleConfig.likeCooldownMinutes.toString());
     _archiveRemoveEnabled = ruleConfig.archiveRemoveEnabled;
     _bestOfEnabled = ruleConfig.bestOfEnabled;
     _followArtistEnabled = ruleConfig.followArtistEnabled;
+    _likeCooldownEnabled = ruleConfig.likeCooldownEnabled;
   }
 
   @override
@@ -55,6 +60,7 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
     _bestOfPlaylistName.dispose();
     _bestOfThreshold.dispose();
     _followArtistThreshold.dispose();
+    _likeCooldownMinutes.dispose();
     super.dispose();
   }
 
@@ -146,6 +152,20 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
               decoration: const InputDecoration(labelText: 'Follow-artist threshold (likes)'),
               keyboardType: TextInputType.number,
             ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Like cooldown'),
+              subtitle: const Text('Ignore accidental repeat-likes of the same track'),
+              value: _likeCooldownEnabled,
+              onChanged: (value) => setState(() => _likeCooldownEnabled = value),
+            ),
+            TextField(
+              controller: _likeCooldownMinutes,
+              enabled: _likeCooldownEnabled,
+              decoration: const InputDecoration(labelText: 'Cooldown (minutes)'),
+              keyboardType: TextInputType.number,
+            ),
             const SizedBox(height: 20),
             FilledButton(
               onPressed: () async {
@@ -164,6 +184,10 @@ class _TriggerConfigScreenState extends ConsumerState<TriggerConfigScreen> {
                   followArtistEnabled: _followArtistEnabled,
                   followArtistThreshold:
                       int.tryParse(_followArtistThreshold.text.trim()) ?? 5,
+                  likeCooldownEnabled: _likeCooldownEnabled,
+                  likeCooldownMinutes:
+                      int.tryParse(_likeCooldownMinutes.text.trim()) ??
+                          AppConstants.defaultLikeCooldownMinutes,
                 );
                 await controller.saveTriggerConfig(config);
                 await controller.saveRuleConfig(ruleConfig);

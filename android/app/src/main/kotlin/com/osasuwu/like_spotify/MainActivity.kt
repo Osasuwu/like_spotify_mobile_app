@@ -168,6 +168,10 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 					val followArtistThreshold = call.argument<Int>("followArtistThreshold")
 						?.takeIf { it >= 1 }
 						?: AppConstants.DEFAULT_FOLLOW_ARTIST_THRESHOLD
+					val likeCooldownEnabled = call.argument<Boolean>("likeCooldownEnabled") ?: true
+					val likeCooldownMinutes = call.argument<Int>("likeCooldownMinutes")
+						?.takeIf { it >= 0 }
+						?: AppConstants.DEFAULT_LIKE_COOLDOWN_MINUTES
 
 					prefs().edit()
 						.putBoolean(AppConstants.KEY_RULE_ARCHIVE_REMOVE_ENABLED, archiveRemoveEnabled)
@@ -177,6 +181,8 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 						.putInt(AppConstants.KEY_RULE_BEST_OF_THRESHOLD, bestOfThreshold)
 						.putBoolean(AppConstants.KEY_RULE_FOLLOW_ARTIST_ENABLED, followArtistEnabled)
 						.putInt(AppConstants.KEY_RULE_FOLLOW_ARTIST_THRESHOLD, followArtistThreshold)
+						.putBoolean(AppConstants.KEY_RULE_LIKE_COOLDOWN_ENABLED, likeCooldownEnabled)
+						.putInt(AppConstants.KEY_RULE_LIKE_COOLDOWN_MINUTES, likeCooldownMinutes)
 						.apply()
 					result.success(true)
 				}

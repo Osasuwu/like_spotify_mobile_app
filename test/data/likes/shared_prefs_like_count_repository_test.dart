@@ -99,4 +99,44 @@ void main() {
       });
     });
   });
+
+  group('last liked at', () {
+    test('returns null for a track that was never liked', () async {
+      expect(await repo.getLastLikedAt('unknown'), isNull);
+    });
+
+    test('records and returns the last-liked timestamp', () async {
+      final at = DateTime.utc(2026, 1, 1, 12, 0, 0);
+      await repo.recordLikedAt('track-1', at);
+
+      expect(await repo.getLastLikedAt('track-1'), at);
+    });
+
+    test('overwrites the previous timestamp for the same track', () async {
+      final first = DateTime.utc(2026, 1, 1, 12, 0, 0);
+      final second = DateTime.utc(2026, 1, 1, 12, 30, 0);
+      await repo.recordLikedAt('track-1', first);
+      await repo.recordLikedAt('track-1', second);
+
+      expect(await repo.getLastLikedAt('track-1'), second);
+    });
+
+    test('tracks last-liked timestamps independently per track', () async {
+      final at1 = DateTime.utc(2026, 1, 1, 12, 0, 0);
+      final at2 = DateTime.utc(2026, 1, 2, 8, 0, 0);
+      await repo.recordLikedAt('track-a', at1);
+      await repo.recordLikedAt('track-b', at2);
+
+      expect(await repo.getLastLikedAt('track-a'), at1);
+      expect(await repo.getLastLikedAt('track-b'), at2);
+    });
+
+    test('persists across repository instances', () async {
+      final at = DateTime.utc(2026, 1, 1, 12, 0, 0);
+      await repo.recordLikedAt('track-p', at);
+
+      final newRepo = SharedPrefsLikeCountRepository();
+      expect(await newRepo.getLastLikedAt('track-p'), at);
+    });
+  });
 }

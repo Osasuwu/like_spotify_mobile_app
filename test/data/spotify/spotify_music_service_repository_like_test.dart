@@ -77,6 +77,12 @@ void main() {
         followArtistThreshold: 5,
       ),
     );
+
+    // Default cooldown stubs: no prior like recorded.
+    when(() => mockLikeCount.getLastLikedAt(any()))
+        .thenAnswer((_) async => null);
+    when(() => mockLikeCount.recordLikedAt(any(), any()))
+        .thenAnswer((_) async {});
   });
 
   group('likeTrack', () {
@@ -223,6 +229,78 @@ void main() {
       final result = await repo.likeTrack(trackInfo);
 
       expect(result.removedFromArchive, true);
+    });
+
+    test('skips liking when track was liked within the cooldown window', () async {
+      when(() => mockLikeCount.getLastLikedAt('track-123')).thenAnswer(
+        (_) async => DateTime.now().toUtc().subtract(const Duration(minutes: 2)),
+      );
+      when(() => mockLikeCount.getTrackLikeCount('track-123'))
+          .thenAnswer((_) async => 1);
+
+      final result = await repo.likeTrack(trackInfo);
+
+      expect(result.trackLiked, false);
+      expect(result.skippedCooldown, true);
+      expect(result.trackLikeCount, 1);
+      verifyNever(() => mockClient.likeTrack(
+            trackId: any(named: 'trackId'),
+            accessToken: any(named: 'accessToken'),
+          ));
+    });
+
+    test('likes track when the cooldown window has expired', () async {
+      when(() => mockLikeCount.getLastLikedAt('track-123')).thenAnswer(
+        (_) async => DateTime.now().toUtc().subtract(const Duration(minutes: 11)),
+      );
+      when(() => mockClient.likeTrack(
+            trackId: any(named: 'trackId'),
+            accessToken: any(named: 'accessToken'),
+          )).thenAnswer((_) async {});
+      when(() => mockLikeCount.incrementTrackLikeCount(any()))
+          .thenAnswer((_) async => 2);
+      when(() => mockLikeCount.incrementArtistLikeCount(any()))
+          .thenAnswer((_) async => 1);
+
+      final result = await repo.likeTrack(trackInfo);
+
+      expect(result.trackLiked, true);
+      expect(result.skippedCooldown, false);
+      verify(() => mockClient.likeTrack(
+            trackId: 'track-123',
+            accessToken: 'valid-token',
+          )).called(1);
+    });
+
+    test('likes track regardless of last-liked time when cooldown is disabled', () async {
+      when(() => mockSettings.loadRuleConfig()).thenAnswer(
+        (_) async => const RuleConfig(
+          archiveRemoveEnabled: true,
+          archivePlaylistName: '',
+          bestOfEnabled: true,
+          bestOfPlaylistName: '',
+          bestOfThreshold: 3,
+          followArtistEnabled: true,
+          followArtistThreshold: 5,
+          likeCooldownEnabled: false,
+        ),
+      );
+      when(() => mockLikeCount.getLastLikedAt('track-123')).thenAnswer(
+        (_) async => DateTime.now().toUtc(),
+      );
+      when(() => mockClient.likeTrack(
+            trackId: any(named: 'trackId'),
+            accessToken: any(named: 'accessToken'),
+          )).thenAnswer((_) async {});
+      when(() => mockLikeCount.incrementTrackLikeCount(any()))
+          .thenAnswer((_) async => 2);
+      when(() => mockLikeCount.incrementArtistLikeCount(any()))
+          .thenAnswer((_) async => 1);
+
+      final result = await repo.likeTrack(trackInfo);
+
+      expect(result.trackLiked, true);
+      expect(result.skippedCooldown, false);
     });
   });
 

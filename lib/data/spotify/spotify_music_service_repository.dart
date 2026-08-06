@@ -257,8 +257,25 @@ class SpotifyMusicServiceRepository implements MusicServiceRepository {
     final accessToken = await _ensureAccessToken();
     final ruleConfig = await _settingsRepository.loadRuleConfig();
 
+    // 0. Skip if this track was liked within the cooldown window
+    if (ruleConfig.likeCooldownEnabled && ruleConfig.likeCooldownMinutes > 0) {
+      final lastLikedAt = await _likeCountRepository.getLastLikedAt(trackInfo.trackId);
+      if (lastLikedAt != null &&
+          DateTime.now().toUtc().difference(lastLikedAt) <
+              Duration(minutes: ruleConfig.likeCooldownMinutes)) {
+        return LikeResult(
+          trackId: trackInfo.trackId,
+          trackName: trackInfo.trackName,
+          trackLiked: false,
+          skippedCooldown: true,
+          trackLikeCount: await _likeCountRepository.getTrackLikeCount(trackInfo.trackId),
+        );
+      }
+    }
+
     // 1. Like the track
     await _spotifyClient.likeTrack(trackId: trackInfo.trackId, accessToken: accessToken);
+    await _likeCountRepository.recordLikedAt(trackInfo.trackId, DateTime.now().toUtc());
 
     // 3. Remove from archive playlist (non-blocking)
     var removedFromArchive = false;

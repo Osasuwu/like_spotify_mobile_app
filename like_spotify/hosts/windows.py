@@ -338,11 +338,13 @@ def _run_like_once() -> int:
 
     feedback = CliFeedback()
     storage = _common.build_storage(cfg)
+    pre_actions = _common.build_pre_actions(cfg)
     post_actions = _common.build_post_actions(cfg, storage)
     pipeline = Pipeline(
         provider=provider,
         feedback=feedback,
         storage=storage,
+        pre_like_actions=pre_actions,
         post_like_actions=post_actions,
     )
     return _common.run_one_shot(pipeline, feedback)
@@ -505,11 +507,13 @@ def _run_resident_host() -> int:
         hotkey=hotkey, volume=_common.resolve_feedback_volume(cfg)
     )
     storage = _common.build_storage(cfg)
+    pre_actions = _common.build_pre_actions(cfg)
     post_actions = _common.build_post_actions(cfg, storage)
     pipeline = Pipeline(
         provider=provider,
         feedback=feedback,
         storage=storage,
+        pre_like_actions=pre_actions,
         post_like_actions=post_actions,
     )
     trigger = make_tray_hotkey_trigger(hotkey=hotkey)

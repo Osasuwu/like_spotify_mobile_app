@@ -7,6 +7,7 @@ import '../../domain/repositories/like_count_repository.dart';
 class SharedPrefsLikeCountRepository implements LikeCountRepository {
   static const _keyTrackCounts = 'track_like_counts';
   static const _keyArtistCounts = 'artist_like_counts';
+  static const _keyTrackLastLikedAt = 'track_last_liked_at';
 
   @override
   Future<int> incrementTrackLikeCount(String trackId) =>
@@ -29,6 +30,21 @@ class SharedPrefsLikeCountRepository implements LikeCountRepository {
 
   @override
   Future<Map<String, int>> loadAllArtistLikeCounts() => _loadMap(_keyArtistCounts);
+
+  @override
+  Future<DateTime?> getLastLikedAt(String trackId) async {
+    final map = await _loadMap(_keyTrackLastLikedAt);
+    final epochMillis = map[trackId];
+    if (epochMillis == null) return null;
+    return DateTime.fromMillisecondsSinceEpoch(epochMillis, isUtc: true);
+  }
+
+  @override
+  Future<void> recordLikedAt(String trackId, DateTime at) async {
+    final map = await _loadMap(_keyTrackLastLikedAt);
+    map[trackId] = at.toUtc().millisecondsSinceEpoch;
+    await _saveMap(_keyTrackLastLikedAt, map);
+  }
 
   Future<int> _increment(String key, String itemId) async {
     final map = await _loadMap(key);

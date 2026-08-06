@@ -8,6 +8,8 @@ class RuleConfig {
   final int bestOfThreshold;
   final bool followArtistEnabled;
   final int followArtistThreshold;
+  final bool likeCooldownEnabled;
+  final int likeCooldownMinutes;
 
   const RuleConfig({
     required this.archiveRemoveEnabled,
@@ -17,6 +19,8 @@ class RuleConfig {
     required this.bestOfThreshold,
     required this.followArtistEnabled,
     required this.followArtistThreshold,
+    this.likeCooldownEnabled = true,
+    this.likeCooldownMinutes = AppConstants.defaultLikeCooldownMinutes,
   });
 
   factory RuleConfig.defaults() {
@@ -28,6 +32,8 @@ class RuleConfig {
       bestOfThreshold: 3,
       followArtistEnabled: true,
       followArtistThreshold: 5,
+      likeCooldownEnabled: true,
+      likeCooldownMinutes: AppConstants.defaultLikeCooldownMinutes,
     );
   }
 
@@ -39,6 +45,8 @@ class RuleConfig {
     int? bestOfThreshold,
     bool? followArtistEnabled,
     int? followArtistThreshold,
+    bool? likeCooldownEnabled,
+    int? likeCooldownMinutes,
   }) {
     return RuleConfig(
       archiveRemoveEnabled: archiveRemoveEnabled ?? this.archiveRemoveEnabled,
@@ -48,6 +56,8 @@ class RuleConfig {
       bestOfThreshold: bestOfThreshold ?? this.bestOfThreshold,
       followArtistEnabled: followArtistEnabled ?? this.followArtistEnabled,
       followArtistThreshold: followArtistThreshold ?? this.followArtistThreshold,
+      likeCooldownEnabled: likeCooldownEnabled ?? this.likeCooldownEnabled,
+      likeCooldownMinutes: likeCooldownMinutes ?? this.likeCooldownMinutes,
     );
   }
 
@@ -66,6 +76,9 @@ class RuleConfig {
     if (followArtistEnabled && followArtistThreshold < 1) {
       errors.add('Follow-artist threshold must be at least 1.');
     }
+    if (likeCooldownEnabled && likeCooldownMinutes < 1) {
+      errors.add('Like cooldown minutes must be at least 1.');
+    }
     return errors;
   }
 
@@ -78,6 +91,8 @@ class RuleConfig {
       'bestOfThreshold': bestOfThreshold,
       'followArtistEnabled': followArtistEnabled,
       'followArtistThreshold': followArtistThreshold,
+      'likeCooldownEnabled': likeCooldownEnabled,
+      'likeCooldownMinutes': likeCooldownMinutes,
     };
   }
 
@@ -91,6 +106,8 @@ class RuleConfig {
       bestOfThreshold: json['bestOfThreshold'] as int? ?? defaults.bestOfThreshold,
       followArtistEnabled: json['followArtistEnabled'] as bool? ?? defaults.followArtistEnabled,
       followArtistThreshold: json['followArtistThreshold'] as int? ?? defaults.followArtistThreshold,
+      likeCooldownEnabled: json['likeCooldownEnabled'] as bool? ?? defaults.likeCooldownEnabled,
+      likeCooldownMinutes: json['likeCooldownMinutes'] as int? ?? defaults.likeCooldownMinutes,
     );
   }
 }

@@ -9,6 +9,7 @@ class AppConstants {
   static const defaultFeedbackVolume = 25;
   static const defaultArchivePlaylistName = 'Discover Weekly Archive';
   static const defaultBestOfPlaylistName = 'Botbotb(Best of the best of the best)';
+  static const defaultLikeCooldownMinutes = 10;
 
   static const serviceMethodChannel = 'like_spotify_mobile_app/service';
   static const serviceEventChannel = 'like_spotify_mobile_app/events';
