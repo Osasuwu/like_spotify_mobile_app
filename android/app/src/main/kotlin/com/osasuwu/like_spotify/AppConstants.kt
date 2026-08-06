@@ -22,14 +22,18 @@ object AppConstants {
     const val KEY_RULE_BEST_OF_THRESHOLD = "rule_best_of_threshold"
     const val KEY_RULE_FOLLOW_ARTIST_ENABLED = "rule_follow_artist_enabled"
     const val KEY_RULE_FOLLOW_ARTIST_THRESHOLD = "rule_follow_artist_threshold"
+    const val KEY_RULE_LIKE_COOLDOWN_ENABLED = "rule_like_cooldown_enabled"
+    const val KEY_RULE_LIKE_COOLDOWN_MINUTES = "rule_like_cooldown_minutes"
 
     const val DEFAULT_ARCHIVE_PLAYLIST_NAME = "Discover Weekly Archive"
     const val DEFAULT_BEST_OF_PLAYLIST_NAME = "Botbotb(Best of the best of the best)"
     const val DEFAULT_BEST_OF_THRESHOLD = 3
     const val DEFAULT_FOLLOW_ARTIST_THRESHOLD = 5
+    const val DEFAULT_LIKE_COOLDOWN_MINUTES = 10
 
     const val KEY_TRACK_LIKE_COUNTS = "track_like_counts"
     const val KEY_ARTIST_LIKE_COUNTS = "artist_like_counts"
+    const val KEY_TRACK_LAST_LIKED_AT = "track_last_liked_at"
     const val KEY_PLAYLIST_CACHE = "playlist_cache"
     const val KEY_PLAYLIST_CACHE_TIMESTAMP = "playlist_cache_timestamp"
     const val KEY_SUPABASE_URL = "supabase_url"

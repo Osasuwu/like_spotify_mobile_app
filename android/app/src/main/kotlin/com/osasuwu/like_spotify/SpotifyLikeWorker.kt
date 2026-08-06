@@ -90,6 +90,20 @@ class SpotifyLikeWorker(
             return Result.success()
         }
 
+        val ruleConfig = loadRuleConfig(prefs)
+
+        // Skip if this track was liked within the cooldown window
+        if (ruleConfig.likeCooldownEnabled && isWithinCooldown(prefs, track.id, ruleConfig.likeCooldownMinutes)) {
+            log(
+                "Like skipped: track liked recently (cooldown)",
+                actionType = "like_track",
+                targetId = track.id,
+                result = "info"
+            )
+            playFeedbackTone(success = true)
+            return Result.success()
+        }
+
         // Like the track
         val likeResult = likeTrack(track.id, token)
         playFeedbackTone(success = likeResult.success)
@@ -104,15 +118,14 @@ class SpotifyLikeWorker(
             return Result.success()
         }
         log("Liked track: ${track.id}", actionType = "like_track", targetId = track.id, result = "success", httpCode = likeResult.statusCode)
+        recordLikedAt(prefs, track.id)
 
-        runRulePipeline(prefs, token, track)
+        runRulePipeline(prefs, token, track, ruleConfig)
 
         return Result.success()
     }
 
-    private fun runRulePipeline(prefs: SharedPreferences, token: String, track: CurrentTrack) {
-        val ruleConfig = loadRuleConfig(prefs)
-
+    private fun runRulePipeline(prefs: SharedPreferences, token: String, track: CurrentTrack, ruleConfig: RuleConfig) {
         if (ruleConfig.archiveRemoveEnabled) {
             runCatching {
                 val archiveId = findPlaylistByName(prefs, ruleConfig.archivePlaylistName, token)
@@ -230,7 +243,12 @@ class SpotifyLikeWorker(
             followArtistThreshold = prefs.getInt(
                 AppConstants.KEY_RULE_FOLLOW_ARTIST_THRESHOLD,
                 AppConstants.DEFAULT_FOLLOW_ARTIST_THRESHOLD
-            ).takeIf { it >= 1 } ?: AppConstants.DEFAULT_FOLLOW_ARTIST_THRESHOLD
+            ).takeIf { it >= 1 } ?: AppConstants.DEFAULT_FOLLOW_ARTIST_THRESHOLD,
+            likeCooldownEnabled = prefs.getBoolean(AppConstants.KEY_RULE_LIKE_COOLDOWN_ENABLED, true),
+            likeCooldownMinutes = prefs.getInt(
+                AppConstants.KEY_RULE_LIKE_COOLDOWN_MINUTES,
+                AppConstants.DEFAULT_LIKE_COOLDOWN_MINUTES
+            ).takeIf { it >= 0 } ?: AppConstants.DEFAULT_LIKE_COOLDOWN_MINUTES
         )
     }
 
@@ -289,6 +307,22 @@ class SpotifyLikeWorker(
         } catch (_: Exception) {
             JSONObject()
         }
+    }
+
+    // ---- Like cooldown -------------------------------------------------
+
+    private fun isWithinCooldown(prefs: SharedPreferences, trackId: String, cooldownMinutes: Int): Boolean {
+        val map = loadCountMap(prefs, AppConstants.KEY_TRACK_LAST_LIKED_AT)
+        val last = map.optLong(trackId, 0L)
+        if (last <= 0L) return false
+        val elapsedMs = System.currentTimeMillis() - last
+        return elapsedMs < cooldownMinutes * 60_000L
+    }
+
+    private fun recordLikedAt(prefs: SharedPreferences, trackId: String) {
+        val map = loadCountMap(prefs, AppConstants.KEY_TRACK_LAST_LIKED_AT)
+        map.put(trackId, System.currentTimeMillis())
+        prefs.edit().putString(AppConstants.KEY_TRACK_LAST_LIKED_AT, map.toString()).apply()
     }
 
     // ---- Playlist lookup / creation -------------------------------------------------
@@ -524,7 +558,9 @@ class SpotifyLikeWorker(
         val bestOfPlaylistName: String,
         val bestOfThreshold: Int,
         val followArtistEnabled: Boolean,
-        val followArtistThreshold: Int
+        val followArtistThreshold: Int,
+        val likeCooldownEnabled: Boolean,
+        val likeCooldownMinutes: Int
     )
 
     data class RefreshedToken(

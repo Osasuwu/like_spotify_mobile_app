@@ -5,4 +5,6 @@ abstract class LikeCountRepository {
   Future<int> getArtistLikeCount(String artistId);
   Future<Map<String, int>> loadAllTrackLikeCounts();
   Future<Map<String, int>> loadAllArtistLikeCounts();
+  Future<DateTime?> getLastLikedAt(String trackId);
+  Future<void> recordLikedAt(String trackId, DateTime at);
 }

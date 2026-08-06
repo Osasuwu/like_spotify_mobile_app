@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 from like_spotify.auth import google as google_auth
-from like_spotify.core.actions import PostLikeAction
+from like_spotify.core.actions import PostLikeAction, PreLikeAction
 from like_spotify.core.pipeline import FeedbackFn, RemoveFromPlaylistPipeline
 from like_spotify.core.storage import Storage
 from like_spotify.extensions.one_shot_cli_trigger import (
@@ -37,6 +37,10 @@ from like_spotify.extensions.follow_artist import (
 )
 from like_spotify.extensions.google_sheets_storage import (
     STORAGE as make_google_sheets_storage,
+)
+from like_spotify.extensions.like_cooldown import (
+    DEFAULT_MINUTES as DEFAULT_LIKE_COOLDOWN_MINUTES,
+    build_like_cooldown,
 )
 from like_spotify.extensions.promote_to_best_of import (
     POST_LIKE_ACTION as make_promote_to_best_of_action,
@@ -66,6 +70,7 @@ def _config_dir() -> Path:
 CONFIG_FILE = _config_dir() / "config.json"
 SPOTIFY_TOKEN_FILE = _config_dir() / "spotify_token.json"
 GOOGLE_TOKEN_FILE = _config_dir() / "google_token.json"
+LIKE_COOLDOWN_FILE = _config_dir() / "like_cooldown.json"
 
 
 def load_config() -> dict:
@@ -164,6 +169,57 @@ def resolve_archive_playlist_name(cfg: dict) -> str:
     )
 
 
+def build_pre_actions(cfg: dict) -> list[PreLikeAction]:
+    """Compose the default-flavor pre-like chain.
+
+    Currently just the like-cooldown gate — `actions.like_cooldown.minutes`
+    (default 10), opt-out via `actions.like_cooldown.enabled = false`.
+    Must be paired with `like_cooldown_post_action` on the *same* `Pipeline`
+    so the gate and the recorder share cooldown state.
+    """
+    actions: list[PreLikeAction] = []
+    nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
+    cooldown_cfg = (
+        nested.get("like_cooldown") if isinstance(nested.get("like_cooldown"), dict) else {}
+    )
+    if cooldown_cfg.get("enabled", True):
+        try:
+            gate, _recorder = build_like_cooldown(
+                LIKE_COOLDOWN_FILE,
+                minutes=int(cooldown_cfg.get("minutes", DEFAULT_LIKE_COOLDOWN_MINUTES)),
+            )
+            actions.append(gate)
+        except Exception:
+            pass
+    return actions
+
+
+def like_cooldown_post_action(cfg: dict) -> PostLikeAction | None:
+    """The recorder half of `build_pre_actions`'s cooldown gate.
+
+    Split into its own function (rather than folded into
+    `build_post_actions`) because pre- and post-actions are built and
+    passed to `Pipeline(...)` separately by every host; both must share the
+    same `_CooldownStore`, so this instantiates a *fresh* gate/recorder
+    pair and discards the gate — the recorder is the only piece missing
+    from `build_pre_actions`'s chain.
+    """
+    nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
+    cooldown_cfg = (
+        nested.get("like_cooldown") if isinstance(nested.get("like_cooldown"), dict) else {}
+    )
+    if not cooldown_cfg.get("enabled", True):
+        return None
+    try:
+        _gate, recorder = build_like_cooldown(
+            LIKE_COOLDOWN_FILE,
+            minutes=int(cooldown_cfg.get("minutes", DEFAULT_LIKE_COOLDOWN_MINUTES)),
+        )
+        return recorder
+    except Exception:
+        return None
+
+
 def build_post_actions(
     cfg: dict, storage: Storage | None
 ) -> list[PostLikeAction]:
@@ -174,6 +230,10 @@ def build_post_actions(
     """
     actions: list[PostLikeAction] = []
     nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
+
+    cooldown_recorder = like_cooldown_post_action(cfg)
+    if cooldown_recorder is not None:
+        actions.append(cooldown_recorder)
 
     archive_name = resolve_archive_playlist_name(cfg)
     if archive_name:

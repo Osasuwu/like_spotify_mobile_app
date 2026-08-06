@@ -280,6 +280,15 @@ class AppController extends StateNotifier<AppState> {
       state = state.copyWith(clearError: true, clearLikeResult: true, liking: true);
       final result = await _musicServiceRepository.likeCurrentTrack();
       state = state.copyWith(lastLikeResult: result, liking: false);
+      if (result.skippedCooldown) {
+        await addLog(
+          actionType: 'like_track',
+          targetId: result.trackName,
+          result: LogResult.info,
+          message: 'Skipped — ${result.trackName} was liked recently (cooldown)',
+        );
+        return;
+      }
       await addLog(
         actionType: 'like_track',
         targetId: result.trackName,
@@ -524,7 +533,19 @@ class AppController extends StateNotifier<AppState> {
       final result = await _musicServiceRepository.likeCurrentTrack();
       state = state.copyWith(lastLikeResult: result, liking: false);
 
-      await _platformServiceRepository.playFeedbackTone(success: result.success);
+      await _platformServiceRepository.playFeedbackTone(
+        success: result.trackLiked || result.skippedCooldown,
+      );
+
+      if (result.skippedCooldown) {
+        await addLog(
+          actionType: 'like_track',
+          targetId: result.trackName,
+          result: LogResult.info,
+          message: 'Skipped — ${result.trackName} was liked recently (cooldown)',
+        );
+        return;
+      }
 
       await addLog(
         actionType: 'like_track',
