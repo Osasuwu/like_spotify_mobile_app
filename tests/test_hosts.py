@@ -108,7 +108,9 @@ def test_write_autostart_vbs_emits_hidden_run(tmp_path, monkeypatch) -> None:
         "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
     )
     monkeypatch.setattr(
-        windows, "_resident_launch_command", lambda: '"C:\\py\\pythonw.exe" -m like_spotify'
+        windows,
+        "_resident_launch_plan",
+        lambda: ('"C:\\py\\pythonw.exe" -m like_spotify', None),
     )
 
     path = windows._write_autostart_vbs()
@@ -121,6 +123,36 @@ def test_write_autostart_vbs_emits_hidden_run(tmp_path, monkeypatch) -> None:
     # Inner double-quotes must be VBScript-escaped (doubled) so the path
     # with spaces survives.
     assert '"""C:\\py\\pythonw.exe"" -m like_spotify"' in vbs
+    assert "PYTHONPATH" not in vbs
+    # write_text(..., newline="") must be used — plain text-mode write
+    # doubles the \r since the string already has explicit \r\n.
+    assert "\r\r" not in path.read_bytes().decode("utf-8")
+
+
+def test_write_autostart_vbs_sets_pythonpath_for_venv_bypass(
+    tmp_path, monkeypatch
+) -> None:
+    # When _resident_launch_plan reports a venv bypass (base pythonw.exe +
+    # site-packages), the VBScript must export PYTHONPATH before Run so the
+    # base interpreter can still find the package.
+    monkeypatch.setattr(
+        "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
+    )
+    monkeypatch.setattr(
+        windows,
+        "_resident_launch_plan",
+        lambda: (
+            '"C:\\base\\pythonw.exe" -m like_spotify',
+            windows.Path("C:\\venv\\Lib\\site-packages"),
+        ),
+    )
+
+    path = windows._write_autostart_vbs()
+
+    vbs = path.read_text(encoding="utf-8")
+    assert 'sh.Environment("Process")("PYTHONPATH") = "C:\\venv\\Lib\\site-packages"' in vbs
+    # The env line must precede Run so the child process inherits it.
+    assert vbs.index("PYTHONPATH") < vbs.index("sh.Run")
 
 
 def test_autostart_target_routes_through_wscript(tmp_path, monkeypatch) -> None:
@@ -129,7 +161,7 @@ def test_autostart_target_routes_through_wscript(tmp_path, monkeypatch) -> None:
     )
     monkeypatch.setattr(windows.sys, "frozen", False, raising=False)
     monkeypatch.setattr(
-        windows, "_resident_launch_command", lambda: '"py.exe" -m like_spotify'
+        windows, "_resident_launch_plan", lambda: ('"py.exe" -m like_spotify', None)
     )
 
     target = windows._autostart_target()
@@ -139,6 +171,39 @@ def test_autostart_target_routes_through_wscript(tmp_path, monkeypatch) -> None:
     # The VBScript is written as a side effect so the Run value points at a
     # real file.
     assert (tmp_path / "autostart_hidden.vbs").exists()
+
+
+def test_venv_bypass_resolves_base_pythonw(tmp_path, monkeypatch) -> None:
+    # Build a fake venv: Scripts/pythonw.exe + pyvenv.cfg pointing at a fake
+    # base install that has its own pythonw.exe.
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    base_pythonw = base_dir / "pythonw.exe"
+    base_pythonw.write_bytes(b"")
+
+    venv_root = tmp_path / "venv"
+    scripts = venv_root / "Scripts"
+    scripts.mkdir(parents=True)
+    stub = scripts / "pythonw.exe"
+    stub.write_bytes(b"")
+    (venv_root / "pyvenv.cfg").write_text(
+        f"home = {base_dir}\nversion = 3.14.2\n", encoding="utf-8"
+    )
+
+    result = windows._venv_bypass(stub)
+
+    assert result == (base_pythonw, venv_root / "Lib" / "site-packages")
+
+
+def test_venv_bypass_none_outside_a_venv(tmp_path) -> None:
+    # No pyvenv.cfg beside the executable's venv root — not a venv at all
+    # (e.g. a frozen exe's directory, or a base install run directly).
+    exe_dir = tmp_path / "Scripts"
+    exe_dir.mkdir()
+    exe = exe_dir / "pythonw.exe"
+    exe.write_bytes(b"")
+
+    assert windows._venv_bypass(exe) is None
 
 
 def test_autostart_target_frozen_launches_exe_directly(monkeypatch) -> None:
