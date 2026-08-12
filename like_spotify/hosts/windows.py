@@ -193,7 +193,7 @@ class TrayFeedback:
             tone = self._tones["remove"]
         else:
             tone = self._tones["like"]
-        winsound.PlaySound(tone, winsound.SND_MEMORY | winsound.SND_ASYNC)
+        winsound.PlaySound(tone, winsound.SND_MEMORY)
 
     @property
     def default_icon(self):
