@@ -9,12 +9,15 @@ behind an integration / manual-test boundary.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from like_spotify.hosts import _stub, select_host, windows
+from like_spotify.hosts.windows import autostart, resident
 
 
 # ── select_host() dispatch ─────────────────────────────────────────────
@@ -41,58 +44,58 @@ def test_select_host_picks_stub_off_win32(platform: str) -> None:
 
 
 def test_wait_for_shell_returns_at_once_when_taskbar_present(monkeypatch) -> None:
-    monkeypatch.setattr(windows, "_taskbar_present", lambda: True)
+    monkeypatch.setattr(resident, "_taskbar_present", lambda: True)
     slept: list[float] = []
-    monkeypatch.setattr(windows.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(resident.time, "sleep", lambda s: slept.append(s))
 
-    assert windows._wait_for_shell() is True
+    assert resident._wait_for_shell() is True
     assert slept == []  # the common post-login case must not block
 
 
 def test_wait_for_shell_polls_until_taskbar_appears(monkeypatch) -> None:
     states = iter([False, False, True])
-    monkeypatch.setattr(windows, "_taskbar_present", lambda: next(states))
+    monkeypatch.setattr(resident, "_taskbar_present", lambda: next(states))
     slept: list[float] = []
-    monkeypatch.setattr(windows.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(resident.time, "sleep", lambda s: slept.append(s))
 
-    assert windows._wait_for_shell(interval=0.01) is True
+    assert resident._wait_for_shell(interval=0.01) is True
     assert len(slept) == 2  # polled twice before the taskbar came up
 
 
 def test_wait_for_shell_times_out(monkeypatch) -> None:
-    monkeypatch.setattr(windows, "_taskbar_present", lambda: False)
-    monkeypatch.setattr(windows.time, "sleep", lambda s: None)
+    monkeypatch.setattr(resident, "_taskbar_present", lambda: False)
+    monkeypatch.setattr(resident.time, "sleep", lambda s: None)
 
-    assert windows._wait_for_shell(timeout=0.0) is False
+    assert resident._wait_for_shell(timeout=0.0) is False
 
 
 def test_wait_for_shell_does_not_hang_when_probe_raises(monkeypatch) -> None:
     def boom() -> bool:
         raise OSError("no shell API")
 
-    monkeypatch.setattr(windows, "_taskbar_present", boom)
-    assert windows._wait_for_shell() is False
+    monkeypatch.setattr(resident, "_taskbar_present", boom)
+    assert resident._wait_for_shell() is False
 
 
 def test_log_appends_line_to_config_dir(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
     )
-    windows._log("hello world")
+    resident._log("hello world")
 
     log = tmp_path / "startup.log"
     assert log.exists()
     contents = log.read_text(encoding="utf-8")
     assert "hello world" in contents
-    assert f"[pid {windows.os.getpid()}]" in contents
+    assert f"[pid {os.getpid()}]" in contents
 
 
 def test_log_never_raises_on_bad_path(monkeypatch) -> None:
     # A config dir that can't be created must not take the process down.
     monkeypatch.setattr(
-        "like_spotify.hosts._common.CONFIG_FILE", windows.Path("\x00bad") / "c.json"
+        "like_spotify.hosts._common.CONFIG_FILE", Path("\x00bad") / "c.json"
     )
-    windows._log("should be swallowed")  # must not raise
+    resident._log("should be swallowed")  # must not raise
 
 
 # ── Autostart hidden-launch wrapper ────────────────────────────────────
@@ -108,12 +111,12 @@ def test_write_autostart_vbs_emits_hidden_run(tmp_path, monkeypatch) -> None:
         "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
     )
     monkeypatch.setattr(
-        windows,
+        autostart,
         "_resident_launch_plan",
         lambda: ('"C:\\py\\pythonw.exe" -m like_spotify', None),
     )
 
-    path = windows._write_autostart_vbs()
+    path = autostart._write_autostart_vbs()
 
     assert path == tmp_path / "autostart_hidden.vbs"
     vbs = path.read_text(encoding="utf-8")
@@ -139,15 +142,15 @@ def test_write_autostart_vbs_sets_pythonpath_for_venv_bypass(
         "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
     )
     monkeypatch.setattr(
-        windows,
+        autostart,
         "_resident_launch_plan",
         lambda: (
             '"C:\\base\\pythonw.exe" -m like_spotify',
-            windows.Path("C:\\venv\\Lib\\site-packages"),
+            Path("C:\\venv\\Lib\\site-packages"),
         ),
     )
 
-    path = windows._write_autostart_vbs()
+    path = autostart._write_autostart_vbs()
 
     vbs = path.read_text(encoding="utf-8")
     assert 'sh.Environment("Process")("PYTHONPATH") = "C:\\venv\\Lib\\site-packages"' in vbs
@@ -159,12 +162,12 @@ def test_autostart_target_routes_through_wscript(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
     )
-    monkeypatch.setattr(windows.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(autostart.sys, "frozen", False, raising=False)
     monkeypatch.setattr(
-        windows, "_resident_launch_plan", lambda: ('"py.exe" -m like_spotify', None)
+        autostart, "_resident_launch_plan", lambda: ('"py.exe" -m like_spotify', None)
     )
 
-    target = windows._autostart_target()
+    target = autostart._autostart_target()
 
     assert target.startswith("wscript.exe //B //Nologo ")
     assert "autostart_hidden.vbs" in target
@@ -190,7 +193,7 @@ def test_venv_bypass_resolves_base_pythonw(tmp_path, monkeypatch) -> None:
         f"home = {base_dir}\nversion = 3.14.2\n", encoding="utf-8"
     )
 
-    result = windows._venv_bypass(stub)
+    result = autostart._venv_bypass(stub)
 
     assert result == (base_pythonw, venv_root / "Lib" / "site-packages")
 
@@ -203,17 +206,17 @@ def test_venv_bypass_none_outside_a_venv(tmp_path) -> None:
     exe = exe_dir / "pythonw.exe"
     exe.write_bytes(b"")
 
-    assert windows._venv_bypass(exe) is None
+    assert autostart._venv_bypass(exe) is None
 
 
 def test_autostart_target_frozen_launches_exe_directly(monkeypatch) -> None:
     # A frozen windowed exe has no console — no VBScript indirection needed.
-    monkeypatch.setattr(windows.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(autostart.sys, "frozen", True, raising=False)
     monkeypatch.setattr(
-        windows.sys, "executable", "C:\\app\\LikeSpotify.exe", raising=False
+        autostart.sys, "executable", "C:\\app\\LikeSpotify.exe", raising=False
     )
 
-    target = windows._autostart_target()
+    target = autostart._autostart_target()
 
     assert "wscript" not in target
     assert "LikeSpotify.exe" in target
