@@ -12,6 +12,7 @@ import struct
 import threading
 import time
 from array import array
+from collections.abc import Callable
 
 from .. import _common
 
@@ -109,11 +110,30 @@ def _synth_tones(volume: float) -> dict[str, bytes]:
     }
 
 
+def _play_tone(data: bytes) -> None:
+    """Play a synthesized-tone WAV buffer through the default sound device.
+
+    `SND_MEMORY` only, deliberately no `SND_ASYNC`: winsound rejects
+    `SND_MEMORY | SND_ASYNC` outright (buffer lifetime can't be guaranteed
+    for async playback from memory) and raises
+    `RuntimeError: Cannot play asynchronously from memory` — see 78f1e17,
+    which fixed a crash on every beep. `_beep` already runs on its own
+    daemon thread, so synchronous playback here doesn't block the caller.
+    """
+    import winsound
+
+    winsound.PlaySound(data, winsound.SND_MEMORY)
+
+
 class TrayFeedback:
     """Owns the tray icon + flash / beep / balloon feedback."""
 
     def __init__(
-        self, hotkey: str, volume: float = _common.DEFAULT_FEEDBACK_VOLUME
+        self,
+        hotkey: str,
+        volume: float = _common.DEFAULT_FEEDBACK_VOLUME,
+        *,
+        player: Callable[[bytes], None] = _play_tone,
     ) -> None:
         self._hotkey = hotkey
         self._icon_default = _make_heart_icon(_ICON_GREEN)
@@ -121,6 +141,7 @@ class TrayFeedback:
         self._icon_error = _make_heart_icon(_ICON_RED)
         self._icon = None  # set in run()
         self._tones = _synth_tones(volume)
+        self._player = player
 
     def attach(self, icon) -> None:
         self._icon = icon
@@ -148,21 +169,21 @@ class TrayFeedback:
     def _beep(self, success: bool, kind: str) -> None:
         """Audible confirmation through the default sound device.
 
-        Plays a synthesized tone (`_synth_tone`, see module docstring) via
-        `PlaySound(..., SND_MEMORY)` rather than `MessageBeep` or `Beep` —
-        both proved unreliable/silent on real hardware. Distinct tones per
-        outcome so like / remove / error are distinguishable without
-        looking at the tray.
+        Plays a synthesized tone (`_synth_tone`, see module docstring)
+        through `self._player` (`_play_tone` by default) rather than
+        `MessageBeep` or `Beep` — both proved unreliable/silent on real
+        hardware. Distinct tones per outcome so like / remove / error are
+        distinguishable without looking at the tray. `player` is an
+        injectable seam so tests can capture playback without touching
+        `winsound`/real audio.
         """
-        import winsound
-
         if not success:
             tone = self._tones["error"]
         elif kind == "remove":
             tone = self._tones["remove"]
         else:
             tone = self._tones["like"]
-        winsound.PlaySound(tone, winsound.SND_MEMORY)
+        self._player(tone)
 
     @property
     def default_icon(self):
