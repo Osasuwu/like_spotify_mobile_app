@@ -13,7 +13,7 @@ This module is the thin composition point; the concerns themselves live in:
                    logging/shell-wait, `_run_resident_host`, `main`
 
 `_autostart_enabled`/`_autostart_set` are re-exported because
-`hosts/_common.py`'s setup wizard reaches into them directly
+`hosts/_setup.py`'s setup wizard reaches into them directly
 (`from like_spotify.hosts import windows as _win`).
 
 Slice history:
@@ -24,6 +24,7 @@ Slice history:
     #53 — swapped `MessageBeep` for a synthesized tone played via
           `PlaySound(..., SND_MEMORY)` (see `feedback._synth_tone`).
     #55 — split this god-module into the package above.
+    #58 — setup wizard moved from `_common.py` to `hosts/_setup.py`.
 """
 
 from __future__ import annotations

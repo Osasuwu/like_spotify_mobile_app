@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from like_spotify.hosts import _common
+from like_spotify.hosts import _common, _setup
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ def test_setup_supabase_writes_config_and_runs_oauth(
     monkeypatch.setattr("builtins.input", _scripted_input(answers))
     monkeypatch.setattr(_common.sys, "platform", "darwin")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
 
     cfg = _common.load_config()
@@ -113,7 +113,7 @@ def test_setup_skips_spotify_oauth_when_tokens_present(
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
     assert fp.authorize_calls == 0  # tokens already there
 
@@ -130,7 +130,7 @@ def test_setup_reauth_forces_oauth_even_with_tokens(
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=True)
+    rc = _setup.do_setup(reauth=True)
     assert rc == 0
     assert fp.authorize_calls == 1
 
@@ -141,7 +141,7 @@ def test_setup_aborts_when_client_id_missing(
     monkeypatch.setattr("builtins.input", _scripted_input([""]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 2
     err = capsys.readouterr().err
     assert "Client ID is required" in err
@@ -157,7 +157,7 @@ def test_setup_storage_none_writes_backend_marker(
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
     cfg = _common.load_config()
     assert cfg["storage"]["backend"] == "none"
@@ -179,7 +179,7 @@ def test_setup_archive_writes_playlist_and_remove_hotkey(
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
     cfg = _common.load_config()
     assert cfg["actions"]["archive_remove"]["playlist_name"] == "Discover Weekly Archive"
@@ -204,7 +204,7 @@ def test_setup_archive_blank_disables_previously_set_name(
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
     cfg = _common.load_config()
     assert cfg["actions"]["archive_remove"]["enabled"] is False
@@ -227,7 +227,7 @@ def test_setup_archive_overwrites_existing_name(
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
     cfg = _common.load_config()
     assert cfg["actions"]["archive_remove"]["playlist_name"] == "New Archive"
@@ -247,7 +247,7 @@ def test_setup_archive_dash_when_nothing_configured_disables_cleanly(
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
     cfg = _common.load_config()
     assert cfg["actions"]["archive_remove"]["enabled"] is False
@@ -267,7 +267,7 @@ def test_setup_aborts_when_supabase_creds_blank(
     ]))
     monkeypatch.setattr(_common.sys, "platform", "linux")
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 2
     assert "supabase" in capsys.readouterr().err.lower()
 
@@ -297,7 +297,7 @@ def test_setup_sheets_branch_runs_google_oauth(
 
     monkeypatch.setattr(_common.google_auth, "authorize", fake_google_authorize)
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
 
     cfg = _common.load_config()
@@ -334,7 +334,7 @@ def test_setup_sheets_skips_google_oauth_when_refresh_token_present(
 
     monkeypatch.setattr(_common.google_auth, "authorize", fake_google_authorize)
 
-    rc = _common.do_setup(reauth=False)
+    rc = _setup.do_setup(reauth=False)
     assert rc == 0
     assert called["n"] == 0
 

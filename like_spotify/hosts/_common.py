@@ -11,6 +11,10 @@ Slice history:
     #27 — split out of `hosts/tray.py` so `_stub.py` (mac/linux CLI)
           can share the same setup / config code without dragging in
           winreg / winsound / pystray.
+    #58 — storage backends and action-chain extensions moved from
+          hand-written if/elif chains to registries (`_STORAGE_BUILDERS`,
+          `_ACTION_EXTENSION_BUILDERS`); the interactive setup wizard
+          moved out to `hosts/_setup.py`.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 from like_spotify.auth import google as google_auth
 from like_spotify.core.actions import PostLikeAction, PreLikeAction
@@ -47,7 +52,6 @@ from like_spotify.extensions.promote_to_best_of import (
 )
 from like_spotify.extensions.spotify import MUSIC_PROVIDER as make_spotify_provider
 from like_spotify.extensions.supabase_storage import STORAGE as make_supabase_storage
-from like_spotify.extensions.tray_hotkey_trigger import DEFAULT_HOTKEY
 
 # Second hotkey: remove the current track from the archive playlist WITHOUT
 # liking it. Distinct from DEFAULT_HOTKEY (the like trigger). The desktop can
@@ -90,16 +94,54 @@ def save_config(cfg: dict) -> None:
 # ── Storage / provider builders ────────────────────────────────────────
 
 
+def _build_supabase_storage(cfg: dict) -> Storage | None:
+    sb = cfg.get("supabase", {}) if isinstance(cfg.get("supabase"), dict) else {}
+    url = sb.get("url") or os.environ.get("SUPABASE_URL", "")
+    key = sb.get("anon_key") or os.environ.get("SUPABASE_ANON_KEY", "")
+    if not url or not key:
+        return None
+    try:
+        return make_supabase_storage(url=url, anon_key=key)
+    except Exception:
+        return None
+
+
+def _build_sheets_storage(cfg: dict) -> Storage | None:
+    sheets = cfg.get("sheets", {}) if isinstance(cfg.get("sheets"), dict) else {}
+    sid = sheets.get("spreadsheet_id") or os.environ.get(
+        "GOOGLE_SHEETS_SPREADSHEET_ID", ""
+    )
+    if not sid:
+        return None
+    try:
+        token_provider = google_auth.make_token_provider(GOOGLE_TOKEN_FILE)
+        return make_google_sheets_storage(
+            spreadsheet_id=sid,
+            token_provider=token_provider,
+        )
+    except Exception:
+        return None
+
+
+# Backend name → builder. Adding a backend is one function + one entry here,
+# not another `elif` in `build_storage`.
+_STORAGE_BUILDERS: dict[str, Callable[[dict], Storage | None]] = {
+    "supabase": _build_supabase_storage,
+    "sheets": _build_sheets_storage,
+}
+
+
 def build_storage(cfg: dict) -> Storage | None:
     """Return the configured Storage impl, or None when none is wired.
 
-    Selection (set in `cfg["storage"]["backend"]`):
+    Selection (set in `cfg["storage"]["backend"]`) dispatches through
+    `_STORAGE_BUILDERS`:
         - "supabase" → SupabaseStorage (default; back-compat: also picked
           when `cfg["supabase"]` is populated and no explicit backend).
         - "sheets"   → GoogleSheetsStorage, backed by tokens persisted
           in `GOOGLE_TOKEN_FILE` (refreshed automatically).
-        - "none" / missing → None. Pipeline treats `None` as "counter
-          silently unavailable" — AC #22 says like still succeeds.
+        - "none" / missing / unknown → None. Pipeline treats `None` as
+          "counter silently unavailable" — AC #22 says like still succeeds.
     """
     backend = (cfg.get("storage", {}) or {}).get("backend", "")
 
@@ -115,34 +157,8 @@ def build_storage(cfg: dict) -> Storage | None:
         elif os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_ANON_KEY"):
             backend = "supabase"
 
-    if backend == "supabase":
-        sb = cfg.get("supabase", {}) if isinstance(cfg.get("supabase"), dict) else {}
-        url = sb.get("url") or os.environ.get("SUPABASE_URL", "")
-        key = sb.get("anon_key") or os.environ.get("SUPABASE_ANON_KEY", "")
-        if not url or not key:
-            return None
-        try:
-            return make_supabase_storage(url=url, anon_key=key)
-        except Exception:
-            return None
-
-    if backend == "sheets":
-        sheets = cfg.get("sheets", {}) if isinstance(cfg.get("sheets"), dict) else {}
-        sid = sheets.get("spreadsheet_id") or os.environ.get(
-            "GOOGLE_SHEETS_SPREADSHEET_ID", ""
-        )
-        if not sid:
-            return None
-        try:
-            token_provider = google_auth.make_token_provider(GOOGLE_TOKEN_FILE)
-            return make_google_sheets_storage(
-                spreadsheet_id=sid,
-                token_provider=token_provider,
-            )
-        except Exception:
-            return None
-
-    return None
+    builder = _STORAGE_BUILDERS.get(backend)
+    return builder(cfg) if builder else None
 
 
 def resolve_archive_playlist_name(cfg: dict) -> str:
@@ -169,13 +185,23 @@ def resolve_archive_playlist_name(cfg: dict) -> str:
     )
 
 
-def _like_cooldown_pre_action(cfg: dict) -> tuple[PreLikeAction | None, PostLikeAction | None]:
+# An action-extension builder takes (cfg, storage) and returns whichever
+# half(s) of the chain it contributes — either can be None.
+_ActionChainBuilder = Callable[
+    [dict, "Storage | None"], "tuple[PreLikeAction | None, PostLikeAction | None]"
+]
+
+
+def _build_like_cooldown_actions(
+    cfg: dict, _storage: Storage | None
+) -> tuple[PreLikeAction | None, PostLikeAction | None]:
     """Build the like-cooldown gate + recorder from one shared `_CooldownStore`.
 
     `actions.like_cooldown.minutes` (default 10), opt-out via
     `actions.like_cooldown.enabled = false`. Both halves come from a single
     `build_like_cooldown` call so the gate and recorder are structurally
-    coupled to the same store — see `build_action_chains`, the only caller.
+    coupled to the same store, rather than each independently constructing
+    (and silently diverging on) their own.
     """
     nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
     cooldown_cfg = (
@@ -192,67 +218,98 @@ def _like_cooldown_pre_action(cfg: dict) -> tuple[PreLikeAction | None, PostLike
         return None, None
 
 
-def build_action_chains(
-    cfg: dict, storage: Storage | None
-) -> tuple[list[PreLikeAction], list[PostLikeAction]]:
-    """Compose the default-flavor pre- and post-like chains together.
-
-    One function rather than separate `build_pre_actions`/`build_post_actions`
-    calls: the like-cooldown gate and recorder must share a single
-    `_CooldownStore` (see `_like_cooldown_pre_action`), and building the two
-    chains independently made that sharing an unenforced convention — nothing
-    stopped a caller from wiring one half onto the `Pipeline` without the
-    other. Every other action is independently togglable as before: omit /
-    blank the relevant config key OR set `actions.<name>.enabled = false`.
-    """
-    pre_actions: list[PreLikeAction] = []
-    post_actions: list[PostLikeAction] = []
-    nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
-
-    cooldown_gate, cooldown_recorder = _like_cooldown_pre_action(cfg)
-    if cooldown_gate is not None:
-        pre_actions.append(cooldown_gate)
-    if cooldown_recorder is not None:
-        post_actions.append(cooldown_recorder)
-
+def _build_archive_remove_actions(
+    cfg: dict, _storage: Storage | None
+) -> tuple[PreLikeAction | None, PostLikeAction | None]:
     archive_name = resolve_archive_playlist_name(cfg)
-    if archive_name:
-        try:
-            post_actions.append(make_archive_remove_action(playlist_name=archive_name))
-        except Exception:
-            pass
+    if not archive_name:
+        return None, None
+    try:
+        return None, make_archive_remove_action(playlist_name=archive_name)
+    except Exception:
+        return None, None
 
-    best_of_cfg = nested.get("promote_to_best_of") if isinstance(nested.get("promote_to_best_of"), dict) else {}
+
+def _build_promote_to_best_of_actions(
+    cfg: dict, _storage: Storage | None
+) -> tuple[PreLikeAction | None, PostLikeAction | None]:
+    nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
+    best_of_cfg = (
+        nested.get("promote_to_best_of")
+        if isinstance(nested.get("promote_to_best_of"), dict)
+        else {}
+    )
     best_of_name = (
         best_of_cfg.get("playlist_name")
         or nested.get("best_of_playlist_name")
         or cfg.get("best_of_playlist_name")  # legacy flat
         or ""
     )
-    if best_of_name and best_of_cfg.get("enabled", True):
-        try:
-            post_actions.append(
-                make_promote_to_best_of_action(
-                    playlist_name=best_of_name,
-                    threshold=int(best_of_cfg.get("threshold", 3)),
-                )
-            )
-        except Exception:
-            pass
+    if not best_of_name or not best_of_cfg.get("enabled", True):
+        return None, None
+    try:
+        return None, make_promote_to_best_of_action(
+            playlist_name=best_of_name,
+            threshold=int(best_of_cfg.get("threshold", 3)),
+        )
+    except Exception:
+        return None, None
 
+
+def _build_follow_artist_actions(
+    cfg: dict, storage: Storage | None
+) -> tuple[PreLikeAction | None, PostLikeAction | None]:
     # FollowArtistAction requires Storage (uses record_artist_track).
-    follow_cfg = nested.get("follow_artist") if isinstance(nested.get("follow_artist"), dict) else {}
-    follow_enabled = follow_cfg.get("enabled", True) and storage is not None
-    if follow_enabled:
-        try:
-            post_actions.append(
-                make_follow_artist_action(
-                    storage=storage,
-                    threshold=int(follow_cfg.get("threshold", 5)),
-                )
-            )
-        except Exception:
-            pass
+    if storage is None:
+        return None, None
+    nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
+    follow_cfg = (
+        nested.get("follow_artist") if isinstance(nested.get("follow_artist"), dict) else {}
+    )
+    if not follow_cfg.get("enabled", True):
+        return None, None
+    try:
+        return None, make_follow_artist_action(
+            storage=storage,
+            threshold=int(follow_cfg.get("threshold", 5)),
+        )
+    except Exception:
+        return None, None
+
+
+# Extension name → builder, in the order each contributes to the chains.
+# Adding an extension is one function + one entry here, not a new branch in
+# `build_action_chains` itself.
+_ACTION_EXTENSION_BUILDERS: list[tuple[str, _ActionChainBuilder]] = [
+    ("like_cooldown", _build_like_cooldown_actions),
+    ("archive_remove", _build_archive_remove_actions),
+    ("promote_to_best_of", _build_promote_to_best_of_actions),
+    ("follow_artist", _build_follow_artist_actions),
+]
+
+
+def build_action_chains(
+    cfg: dict, storage: Storage | None
+) -> tuple[list[PreLikeAction], list[PostLikeAction]]:
+    """Compose the default-flavor pre- and post-like chains together.
+
+    Iterates `_ACTION_EXTENSION_BUILDERS` rather than hand-checking each
+    extension in a growing if-chain — every extension is independently
+    togglable via `actions.<name>.enabled = false` (or by leaving its
+    config key blank), and each builder gets the full `(cfg, storage)`
+    context so extensions like like-cooldown that need to construct
+    shared state across the pre/post split (see `_build_like_cooldown_actions`)
+    still can.
+    """
+    pre_actions: list[PreLikeAction] = []
+    post_actions: list[PostLikeAction] = []
+
+    for _name, builder in _ACTION_EXTENSION_BUILDERS:
+        pre, post = builder(cfg, storage)
+        if pre is not None:
+            pre_actions.append(pre)
+        if post is not None:
+            post_actions.append(post)
 
     return pre_actions, post_actions
 
@@ -327,277 +384,6 @@ def build_remove_pipeline(
         )
     except ValueError:
         return None
-
-
-# ── Interactive setup ──────────────────────────────────────────────────
-
-
-def _prompt(label: str, *, default: str = "", required: bool = False) -> str:
-    hint = f" [{default}]" if default else (" [required]" if required else "")
-    entered = input(f"{label}{hint}: ").strip()
-    value = entered or default
-    if required and not value:
-        raise _SetupAbort(f"{label} is required")
-    return value
-
-
-def _prompt_secret(label: str, *, current: str = "") -> str:
-    """Prompt with a masked preview of the current value (if any).
-
-    `getpass`-style hiding isn't worth it here — `--setup` runs in a
-    terminal the user controls, and the value is then written to a
-    plaintext config file anyway. The mask is just to keep shoulder-
-    surfing-friendly diffs out of `--config` output.
-    """
-    preview = (current[:4] + "…") if current else "required"
-    entered = input(f"{label} [{preview}]: ").strip()
-    return entered or current
-
-
-def _prompt_choice(
-    label: str, choices: list[str], default: str
-) -> str:
-    options = "/".join(c if c != default else f"{c}*" for c in choices)
-    while True:
-        entered = input(f"{label} [{options}]: ").strip().lower()
-        value = entered or default
-        if value in choices:
-            return value
-        print(f"  pick one of {', '.join(choices)}", file=sys.stderr)
-
-
-def _prompt_yes_no(label: str, *, default: bool) -> bool:
-    suffix = "[Y/n]" if default else "[y/N]"
-    entered = input(f"{label} {suffix}: ").strip().lower()
-    if not entered:
-        return default
-    return entered.startswith("y")
-
-
-class _SetupAbort(Exception):
-    """User-facing setup failure — caught by `do_setup`."""
-
-
-def do_setup(reauth: bool = False) -> int:
-    """Interactive wizard: Spotify OAuth → storage choice → autostart.
-
-    Re-runnable. Existing OAuth tokens (Spotify, Google) are kept unless
-    `reauth=True` is passed — switching storage backend does NOT
-    invalidate the other backend's tokens, so a user can flip
-    supabase ↔ sheets without redoing OAuth.
-    """
-    print("Like Spotify — interactive setup")
-    print("--------------------------------")
-    cfg = load_config()
-    try:
-        _setup_spotify(cfg, reauth=reauth)
-        _setup_storage(cfg, reauth=reauth)
-        _setup_archive(cfg)
-        _setup_autostart()
-    except _SetupAbort as e:
-        print(f"Aborted: {e}", file=sys.stderr)
-        return 2
-    except KeyboardInterrupt:
-        print("\nAborted by user.", file=sys.stderr)
-        return 130
-
-    save_config(cfg)
-    print(f"\nConfig saved: {CONFIG_FILE}")
-    print("Done. Launch with: like-spotify")
-    return 0
-
-
-# ── Wizard steps ───────────────────────────────────────────────────────
-
-
-def _setup_spotify(cfg: dict, *, reauth: bool) -> None:
-    print("\n[1/4] Spotify")
-    current_id = cfg.get("spotify", {}).get("client_id", "")
-    client_id = _prompt_secret("  Client ID", current=current_id)
-    if not client_id:
-        raise _SetupAbort(
-            "Spotify Client ID is required. Get one at "
-            "https://developer.spotify.com/dashboard "
-            "(redirect URI: http://127.0.0.1:8793/callback)."
-        )
-    cfg.setdefault("spotify", {})["client_id"] = client_id
-    cfg.setdefault("trigger", {}).setdefault("hotkey", DEFAULT_HOTKEY)
-    # Persist now so a later step's failure doesn't lose the client id.
-    save_config(cfg)
-
-    provider = make_provider(client_id)
-    if provider.has_tokens and not reauth:
-        print("  ✓ Spotify tokens already saved — skipping browser auth")
-        print("    (use --reauth to force a re-login)")
-        return
-    print("  Opening browser for Spotify authorization (PKCE)…")
-    provider.authorize()
-    print(f"  ✓ Tokens saved: {SPOTIFY_TOKEN_FILE}")
-
-
-def _setup_storage(cfg: dict, *, reauth: bool) -> None:
-    print("\n[2/4] Storage (counts likes across devices)")
-    current_backend = (cfg.get("storage", {}) or {}).get("backend", "")
-    default = current_backend or "none"
-    backend = _prompt_choice(
-        "  Backend", choices=["supabase", "sheets", "none"], default=default
-    )
-    cfg.setdefault("storage", {})["backend"] = backend
-
-    if backend == "supabase":
-        sb = cfg.setdefault("supabase", {})
-        print("    (project URL, e.g. https://<ref>.supabase.co — not the /rest/v1 endpoint)")
-        sb["url"] = _prompt_secret("  Supabase URL", current=sb.get("url", ""))
-        sb["anon_key"] = _prompt_secret(
-            "  Supabase anon key", current=sb.get("anon_key", "")
-        )
-        if not sb["url"] or not sb["anon_key"]:
-            raise _SetupAbort("supabase URL + anon key are both required")
-        print("  ✓ Supabase configured")
-    elif backend == "sheets":
-        sheets = cfg.setdefault("sheets", {})
-        sheets["spreadsheet_id"] = _prompt_secret(
-            "  Spreadsheet ID (from the sheet URL)",
-            current=sheets.get("spreadsheet_id", ""),
-        )
-        if not sheets["spreadsheet_id"]:
-            raise _SetupAbort("spreadsheet ID is required for sheets backend")
-
-        tokens = google_auth.load_tokens(GOOGLE_TOKEN_FILE)
-        if tokens.get("refresh_token") and not reauth:
-            print("  ✓ Google tokens already saved — skipping browser auth")
-            print("    (use --reauth to force a re-login)")
-        else:
-            client_id = _prompt_secret(
-                "  Google OAuth Client ID (Desktop app)",
-                current=tokens.get("client_id", ""),
-            )
-            client_secret = _prompt_secret(
-                "  Google OAuth Client Secret",
-                current=tokens.get("client_secret", ""),
-            )
-            if not client_id or not client_secret:
-                raise _SetupAbort(
-                    "google client id + secret are both required "
-                    "(create a Desktop OAuth client at "
-                    "https://console.cloud.google.com/apis/credentials)"
-                )
-            print("  Opening browser for Google authorization…")
-            google_auth.authorize(
-                client_id=client_id,
-                client_secret=client_secret,
-                token_path=GOOGLE_TOKEN_FILE,
-            )
-            print(f"  ✓ Google tokens saved: {GOOGLE_TOKEN_FILE}")
-    else:
-        print("  ✓ Counter disabled — likes still work, no count tracking.")
-
-
-def _setup_archive(cfg: dict) -> None:
-    """Discover Weekly clean-up: archive playlist + remove-without-like hotkey.
-
-    Two coupled settings, one playlist:
-      - `actions.archive_remove.playlist_name` — when you like a track, it's
-        auto-removed from this "save-for-later" playlist (the like flow's
-        PostLikeAction).
-      - `trigger.remove_hotkey` — a second hotkey that removes the current
-        track from the *same* playlist WITHOUT liking it, for tracks you
-        want gone but not saved. Only meaningful when a playlist is set.
-
-    Empty input keeps the current value (the wizard's keep-on-blank idiom),
-    so re-running setup for an unrelated step won't clobber the archive.
-    Type `-` to turn the feature off; blank with nothing set = skip.
-    """
-    print("\n[3/4] Discover Weekly clean-up (optional)")
-    print(
-        "  Name a playlist (e.g. an archived copy of Discover Weekly) to "
-        "curate.\n"
-        "  Liking a track removes it from this playlist; a second hotkey "
-        "removes\n"
-        "  the current track WITHOUT liking it. Blank = skip, '-' = turn off."
-    )
-    current_name = resolve_archive_playlist_name(cfg)
-    if current_name:
-        print(f"  (currently: {current_name})")
-    playlist_name = _prompt("  Archive playlist name", default=current_name)
-    archive_cfg = cfg.setdefault("actions", {}).setdefault("archive_remove", {})
-
-    if playlist_name == "-":
-        # Explicit off switch — idempotent: works whether or not a name was
-        # set. The message reflects which it was so '-' never looks like a
-        # no-op when the user clearly asked to turn it off.
-        archive_cfg["enabled"] = False
-        print("  ✓ Clean-up disabled." if current_name else "  ✓ Already disabled.")
-        return
-    if not playlist_name:
-        # Bare Enter is only empty when nothing was configured (keep-on-blank
-        # would otherwise have returned current_name) — so this is a skip.
-        print("  ✓ Skipped.")
-        return
-
-    archive_cfg["playlist_name"] = playlist_name
-    archive_cfg["enabled"] = True
-
-    current_hotkey = resolve_remove_hotkey(cfg)
-    remove_hotkey = _prompt(
-        "  Remove-without-like hotkey", default=current_hotkey or DEFAULT_REMOVE_HOTKEY
-    )
-    cfg.setdefault("trigger", {})["remove_hotkey"] = remove_hotkey
-    print(f"  ✓ Archive playlist: {playlist_name}")
-    print(f"  ✓ Remove hotkey: {remove_hotkey.upper()}")
-
-
-def _setup_autostart() -> None:
-    print("\n[4/4] Autostart")
-    if sys.platform != "win32":
-        # Print instructions only — issue AC: no auto-config on mac/linux.
-        if sys.platform == "darwin":
-            print(
-                "  macOS: add a Launch Agent to start at login. Example "
-                "(write to ~/Library/LaunchAgents/com.osasuwu.like-spotify.plist):"
-            )
-            print(
-                '    <plist version="1.0"><dict>'
-                '<key>Label</key><string>com.osasuwu.like-spotify</string>'
-                '<key>ProgramArguments</key><array>'
-                '<string>like-spotify</string><string>like-once</string>'
-                '</array>'
-                '<key>RunAtLoad</key><true/></dict></plist>'
-            )
-            print("    then: launchctl load ~/Library/LaunchAgents/com.osasuwu.like-spotify.plist")
-        else:
-            print(
-                "  Linux: drop a .desktop entry into ~/.config/autostart/, e.g.\n"
-                "    [Desktop Entry]\n"
-                "    Type=Application\n"
-                "    Exec=like-spotify like-once\n"
-                "    Hidden=false\n"
-                "    NoDisplay=false\n"
-                "    Name=Like Spotify"
-            )
-        print("  (See CONTRIBUTING.md for the full hosts/macos.py / linux.py story.)")
-        return
-
-    # Windows: prompt to toggle the registry Run key.
-    try:
-        from like_spotify.hosts import windows as _win
-
-        already = _win._autostart_enabled()
-    except Exception:
-        print("  (could not query autostart — skip)", file=sys.stderr)
-        return
-
-    label = (
-        "  Autostart is currently ENABLED — keep it on?"
-        if already
-        else "  Start Like Spotify when you log in to Windows?"
-    )
-    if _prompt_yes_no(label, default=True):
-        _win._autostart_set(True)
-        print("  ✓ Autostart enabled (HKCU\\…\\Run)")
-    else:
-        _win._autostart_set(False)
-        print("  ✓ Autostart disabled")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ from like_spotify.extensions.tray_hotkey_trigger import (
     TRIGGER as make_tray_hotkey_trigger,
 )
 
-from .. import _common
+from .. import _common, _setup
 from .._stub import CliFeedback
 from . import tray
 from .autostart import _autostart_enabled, _autostart_set
@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.config:
         return _common.print_config_paths()
     if args.setup:
-        return _common.do_setup(reauth=args.reauth)
+        return _setup.do_setup(reauth=args.reauth)
     if args.command == "like-once":
         return _run_like_once()
     if args.command == "remove-once":
