@@ -96,8 +96,7 @@ def _run_like_once() -> int:
 
     feedback = CliFeedback()
     storage = _common.build_storage(cfg)
-    pre_actions = _common.build_pre_actions(cfg)
-    post_actions = _common.build_post_actions(cfg, storage)
+    pre_actions, post_actions = _common.build_action_chains(cfg, storage)
     pipeline = Pipeline(
         provider=provider,
         feedback=feedback,
