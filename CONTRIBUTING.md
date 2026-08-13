@@ -32,9 +32,10 @@ like_spotify/
 │   ├── promote_to_best_of/       # PostLikeAction.
 │   └── follow_artist/            # PostLikeAction (needs Storage).
 └── hosts/
-    ├── windows.py        # Resident tray + global hotkey + autostart.
+    ├── windows/          # Resident tray + global hotkey + autostart.
     ├── _stub.py          # macOS / Linux CLI fallback (like-once only).
-    └── _common.py        # Shared config / setup / pipeline wiring.
+    ├── _common.py        # Config I/O + storage/action-chain builder registries.
+    └── _setup.py         # Interactive `--setup` wizard.
 ```
 
 `hosts/__init__.py` picks the right host at startup via `sys.platform`.
@@ -57,10 +58,10 @@ macOS host would:
 - Install a Launch Agent for autostart, or print clean instructions for
   the user to copy a plist into `~/Library/LaunchAgents/` — explicit is
   fine, we don't ship a Launch Agent automatically.
-- Reuse everything in `hosts/_common.py` — pipeline wiring, setup
-  flow, config paths.
+- Reuse everything in `hosts/_common.py` (pipeline wiring, config paths,
+  builder registries) and `hosts/_setup.py` (the setup wizard).
 
-Mirror `hosts/windows.py` for shape; aim for ~200 LOC. Hook it up by
+Mirror `hosts/windows/` for shape; aim for ~200 LOC. Hook it up by
 extending the dispatch in `hosts/__init__.py::select_host`.
 
 ### `hosts/linux.py` — Linux tray host
@@ -74,7 +75,7 @@ Same shape as macOS:
   so prefer `pynput` (X11/Wayland) or document the limitation.
 - Autostart via a generated `.desktop` file in
   `~/.config/autostart/`.
-- Same `_common` wiring as the other hosts.
+- Same `_common` / `_setup` wiring as the other hosts.
 
 ### Smaller wins
 
@@ -362,8 +363,11 @@ provider's name, so the soft dependency is visible.
 3. Register the manifest in `pyproject.toml`'s
    `[tool.setuptools.package-data]` block so it ships in the wheel.
 4. If the extension needs configuration, prompt for it in
-   `like_spotify/hosts/_common.py::do_setup` (the wizard) and read it
-   from `cfg` in the relevant `_build_*` helper.
+   `like_spotify/hosts/_setup.py::do_setup` (the wizard) and read it
+   from `cfg` in a `_build_*` helper registered in `_common.py`'s
+   `_STORAGE_BUILDERS` (storage backends) or `_ACTION_EXTENSION_BUILDERS`
+   (pre/post-like actions) — adding an extension is one function + one
+   registry entry, not a new `if`/`elif` branch.
 5. Tests under `tests/`. For `Storage`, drop your fixture into the
    parametrised contract suite (`tests/test_storage_contract.py`). For
    everything else, small async unit tests against the interface +
@@ -383,9 +387,10 @@ push/PR to `main`. Adding a Python job is itself a good first PR.
 
 ## Conventions
 
-- Cross-platform helpers in `hosts/_common.py`; OS-bound side effects
+- Cross-platform helpers in `hosts/_common.py` (config I/O, builder
+  registries) and `hosts/_setup.py` (the wizard); OS-bound side effects
   in `hosts/<platform>.py`. **No `winreg` / `winsound` / `ctypes.windll`
-  outside `hosts/windows.py`.**
+  outside `hosts/windows/`.**
 - Each `PostLikeAction` is independent — a failure must not abort the
   chain (see `like_spotify/core/pipeline.py`).
 - "Abstractions need two real implementations" — when you add an

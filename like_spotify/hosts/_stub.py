@@ -21,7 +21,7 @@ import sys
 
 from like_spotify.core.pipeline import Pipeline
 
-from . import _common
+from . import _common, _setup
 
 _PLATFORM_HINT = {
     "darwin": (
@@ -129,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.config:
         return _common.print_config_paths()
     if args.setup:
-        return _common.do_setup(reauth=args.reauth)
+        return _setup.do_setup(reauth=args.reauth)
 
     if args.command == "like-once":
         return _run_like_once()
