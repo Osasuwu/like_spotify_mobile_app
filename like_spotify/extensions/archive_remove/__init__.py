@@ -22,8 +22,8 @@ import logging
 
 from like_spotify.core.actions import PostLikeAction
 from like_spotify.core.errors import AuthError
+from like_spotify.core.music_provider import PlaylistCapableProvider
 from like_spotify.core.types import LikeContext
-from like_spotify.extensions.spotify import SpotifyMusicProvider
 
 DOMAIN = "archive_remove"
 
@@ -45,8 +45,8 @@ class ArchiveRemoveAction(PostLikeAction):
 
     async def run(self, ctx: LikeContext) -> None:
         provider = ctx.music_provider
-        if not isinstance(provider, SpotifyMusicProvider):
-            # Other flavours don't speak Spotify playlist API. Silent no-op.
+        if not isinstance(provider, PlaylistCapableProvider):
+            # Other flavours don't speak the playlist capability. Silent no-op.
             return
 
         if not self._resolved:
@@ -65,7 +65,7 @@ class ArchiveRemoveAction(PostLikeAction):
         # Update local snapshot so a re-trigger in the same session stays no-op.
         self._track_ids.discard(track_id)
 
-    async def _resolve(self, provider: SpotifyMusicProvider) -> None:
+    async def _resolve(self, provider: PlaylistCapableProvider) -> None:
         self._resolved = True
         try:
             pid = await provider.find_playlist_by_name(self._playlist_name)

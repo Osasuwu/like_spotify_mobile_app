@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Protocol, runtime_checkable
 
 from .types import CurrentTrack
 
@@ -31,3 +32,27 @@ class MusicProvider(ABC):
         Expected O(1) after setup (cached post-auth value). Async because
         a future provider may need a lazy fetch on first call.
         """
+
+
+@runtime_checkable
+class PlaylistCapableProvider(Protocol):
+    """Optional capability: named-playlist read/write + follow-artist.
+
+    Spotify-flavored extras that don't belong on the base `MusicProvider`
+    (per docs/design/interfaces.md §4.6 — stay at one flag until >=3 real
+    capability axes emerge; this is that first axis). Call sites that need
+    them check `isinstance(provider, PlaylistCapableProvider)` instead of
+    duplicating an `isinstance(provider, SpotifyMusicProvider)` or
+    `getattr(provider, "...", None)` probe each — `SpotifyMusicProvider`
+    satisfies this structurally, no inheritance required.
+    """
+
+    async def find_playlist_by_name(self, name: str) -> str | None: ...
+
+    async def get_playlist_track_ids(self, playlist_id: str) -> set[str]: ...
+
+    async def remove_track_from_playlist(
+        self, track_id: str, playlist_id: str
+    ) -> None: ...
+
+    async def follow_artist(self, artist_id: str) -> None: ...
