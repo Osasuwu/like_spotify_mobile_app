@@ -169,76 +169,56 @@ def resolve_archive_playlist_name(cfg: dict) -> str:
     )
 
 
-def build_pre_actions(cfg: dict) -> list[PreLikeAction]:
-    """Compose the default-flavor pre-like chain.
+def _like_cooldown_pre_action(cfg: dict) -> tuple[PreLikeAction | None, PostLikeAction | None]:
+    """Build the like-cooldown gate + recorder from one shared `_CooldownStore`.
 
-    Currently just the like-cooldown gate — `actions.like_cooldown.minutes`
-    (default 10), opt-out via `actions.like_cooldown.enabled = false`.
-    Must be paired with `like_cooldown_post_action` on the *same* `Pipeline`
-    so the gate and the recorder share cooldown state.
-    """
-    actions: list[PreLikeAction] = []
-    nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
-    cooldown_cfg = (
-        nested.get("like_cooldown") if isinstance(nested.get("like_cooldown"), dict) else {}
-    )
-    if cooldown_cfg.get("enabled", True):
-        try:
-            gate, _recorder = build_like_cooldown(
-                LIKE_COOLDOWN_FILE,
-                minutes=int(cooldown_cfg.get("minutes", DEFAULT_LIKE_COOLDOWN_MINUTES)),
-            )
-            actions.append(gate)
-        except Exception:
-            pass
-    return actions
-
-
-def like_cooldown_post_action(cfg: dict) -> PostLikeAction | None:
-    """The recorder half of `build_pre_actions`'s cooldown gate.
-
-    Split into its own function (rather than folded into
-    `build_post_actions`) because pre- and post-actions are built and
-    passed to `Pipeline(...)` separately by every host; both must share the
-    same `_CooldownStore`, so this instantiates a *fresh* gate/recorder
-    pair and discards the gate — the recorder is the only piece missing
-    from `build_pre_actions`'s chain.
+    `actions.like_cooldown.minutes` (default 10), opt-out via
+    `actions.like_cooldown.enabled = false`. Both halves come from a single
+    `build_like_cooldown` call so the gate and recorder are structurally
+    coupled to the same store — see `build_action_chains`, the only caller.
     """
     nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
     cooldown_cfg = (
         nested.get("like_cooldown") if isinstance(nested.get("like_cooldown"), dict) else {}
     )
     if not cooldown_cfg.get("enabled", True):
-        return None
+        return None, None
     try:
-        _gate, recorder = build_like_cooldown(
+        return build_like_cooldown(
             LIKE_COOLDOWN_FILE,
             minutes=int(cooldown_cfg.get("minutes", DEFAULT_LIKE_COOLDOWN_MINUTES)),
         )
-        return recorder
     except Exception:
-        return None
+        return None, None
 
 
-def build_post_actions(
+def build_action_chains(
     cfg: dict, storage: Storage | None
-) -> list[PostLikeAction]:
-    """Compose the default-flavor post-like chain.
+) -> tuple[list[PreLikeAction], list[PostLikeAction]]:
+    """Compose the default-flavor pre- and post-like chains together.
 
-    Each action is independently togglable: omit / blank the relevant
-    config key OR set `actions.<name>.enabled = false` to skip it.
+    One function rather than separate `build_pre_actions`/`build_post_actions`
+    calls: the like-cooldown gate and recorder must share a single
+    `_CooldownStore` (see `_like_cooldown_pre_action`), and building the two
+    chains independently made that sharing an unenforced convention — nothing
+    stopped a caller from wiring one half onto the `Pipeline` without the
+    other. Every other action is independently togglable as before: omit /
+    blank the relevant config key OR set `actions.<name>.enabled = false`.
     """
-    actions: list[PostLikeAction] = []
+    pre_actions: list[PreLikeAction] = []
+    post_actions: list[PostLikeAction] = []
     nested = cfg.get("actions") if isinstance(cfg.get("actions"), dict) else {}
 
-    cooldown_recorder = like_cooldown_post_action(cfg)
+    cooldown_gate, cooldown_recorder = _like_cooldown_pre_action(cfg)
+    if cooldown_gate is not None:
+        pre_actions.append(cooldown_gate)
     if cooldown_recorder is not None:
-        actions.append(cooldown_recorder)
+        post_actions.append(cooldown_recorder)
 
     archive_name = resolve_archive_playlist_name(cfg)
     if archive_name:
         try:
-            actions.append(make_archive_remove_action(playlist_name=archive_name))
+            post_actions.append(make_archive_remove_action(playlist_name=archive_name))
         except Exception:
             pass
 
@@ -251,7 +231,7 @@ def build_post_actions(
     )
     if best_of_name and best_of_cfg.get("enabled", True):
         try:
-            actions.append(
+            post_actions.append(
                 make_promote_to_best_of_action(
                     playlist_name=best_of_name,
                     threshold=int(best_of_cfg.get("threshold", 3)),
@@ -265,7 +245,7 @@ def build_post_actions(
     follow_enabled = follow_cfg.get("enabled", True) and storage is not None
     if follow_enabled:
         try:
-            actions.append(
+            post_actions.append(
                 make_follow_artist_action(
                     storage=storage,
                     threshold=int(follow_cfg.get("threshold", 5)),
@@ -274,7 +254,7 @@ def build_post_actions(
         except Exception:
             pass
 
-    return actions
+    return pre_actions, post_actions
 
 
 def resolve_client_id(cfg: dict) -> str:

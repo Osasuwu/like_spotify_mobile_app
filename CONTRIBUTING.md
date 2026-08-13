@@ -334,7 +334,7 @@ Existing impls: `archive_remove`, `promote_to_best_of`, `follow_artist`.
 
 `archive_remove` reads its target playlist from
 `actions.archive_remove.playlist_name` in `config.json`; a blank name
-disables it (and `build_post_actions` drops the action). The same name
+disables it (and `build_action_chains` drops the action). The same name
 feeds the standalone **remove-without-like** flow: `RemoveFromPlaylistPipeline`
 (in `core/pipeline.py`) removes the currently-playing track from that
 playlist *without* a like. The Windows tray host binds it to a second
