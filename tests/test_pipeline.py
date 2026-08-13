@@ -474,6 +474,12 @@ class FakeRemoveProvider(MusicProvider):
         ):
             raise self._remove_raises
 
+    async def get_playlist_track_ids(self, playlist_id: str) -> set[str]:  # pragma: no cover
+        raise AssertionError("remove flow does not need track-id membership")
+
+    async def follow_artist(self, artist_id: str) -> None:  # pragma: no cover
+        raise AssertionError("remove flow does not follow artists")
+
 
 @pytest.mark.asyncio
 async def test_remove_pipeline_removes_current_track_without_liking() -> None:

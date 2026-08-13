@@ -20,9 +20,9 @@ import logging
 
 from like_spotify.core.actions import PostLikeAction
 from like_spotify.core.errors import AuthError
+from like_spotify.core.music_provider import PlaylistCapableProvider
 from like_spotify.core.storage import Storage
 from like_spotify.core.types import LikeContext
-from like_spotify.extensions.spotify import SpotifyMusicProvider
 
 DOMAIN = "follow_artist"
 DEFAULT_THRESHOLD = 5
@@ -41,7 +41,7 @@ class FollowArtistAction(PostLikeAction):
 
     async def run(self, ctx: LikeContext) -> None:
         provider = ctx.music_provider
-        if not isinstance(provider, SpotifyMusicProvider):
+        if not isinstance(provider, PlaylistCapableProvider):
             return
         artist_ids = ctx.track.artist_ids
         if not artist_ids:

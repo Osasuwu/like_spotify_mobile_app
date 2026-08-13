@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from .actions import PostLikeAction, PreLikeAction
-from .music_provider import MusicProvider
+from .music_provider import MusicProvider, PlaylistCapableProvider
 from .storage import Storage
 from .types import CurrentTrack, LikeContext
 
@@ -138,10 +138,10 @@ class RemoveFromPlaylistPipeline:
     a separate Trigger wired here lets the user curate a playlist without
     liking the track.
 
-    Provider-agnostic by duck typing: it needs `get_currently_playing`
-    (on the `MusicProvider` base) plus `find_playlist_by_name` /
-    `remove_track_from_playlist` (Spotify-flavored extras, not on the
-    base). A provider lacking the playlist API gets a clean error
+    Provider-agnostic via `PlaylistCapableProvider`: it needs
+    `get_currently_playing` (on the `MusicProvider` base) plus
+    `find_playlist_by_name` / `remove_track_from_playlist` (the optional
+    playlist capability). A provider lacking it gets a clean error
     feedback rather than an exception — keeping `core` free of any
     extension import.
 
@@ -181,9 +181,7 @@ class RemoveFromPlaylistPipeline:
             self._feedback(False, "Nothing playing", "", kind="remove")
             return
 
-        finder = getattr(self._provider, "find_playlist_by_name", None)
-        remover = getattr(self._provider, "remove_track_from_playlist", None)
-        if finder is None or remover is None:
+        if not isinstance(self._provider, PlaylistCapableProvider):
             self._feedback(
                 False,
                 "Remove unsupported",
@@ -194,7 +192,9 @@ class RemoveFromPlaylistPipeline:
 
         if self._playlist_id is None:
             try:
-                self._playlist_id = await finder(self._playlist_name)
+                self._playlist_id = await self._provider.find_playlist_by_name(
+                    self._playlist_name
+                )
             except Exception as e:
                 # Not cached — next press retries.
                 self._feedback(
@@ -208,7 +208,9 @@ class RemoveFromPlaylistPipeline:
                 return
 
         try:
-            await remover(track.provider_track_id, self._playlist_id)
+            await self._provider.remove_track_from_playlist(
+                track.provider_track_id, self._playlist_id
+            )
         except Exception as e:
             # The cached id may be stale (playlist deleted/renamed since the
             # last resolve) — drop it so the next press re-resolves instead
