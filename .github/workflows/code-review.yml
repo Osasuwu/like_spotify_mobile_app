@@ -79,7 +79,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "*"
           plugin_marketplaces: ./.claude/marketplace
-          plugins: code-review@jarvis-fork-plugins
+          plugins: code-review@like-spotify-fork-plugins
           prompt: |
             Run /code-review for PR #${{ steps.pr.outputs.number }} in repo ${{ github.repository }}.
 
@@ -295,7 +295,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "*"
           plugin_marketplaces: ./.claude/marketplace
-          plugins: code-review@jarvis-fork-plugins
+          plugins: code-review@like-spotify-fork-plugins
           prompt: |
             Run /code-review for PR #${{ steps.pr.outputs.number }} in repo ${{ github.repository }}.
 
@@ -465,6 +465,15 @@ jobs:
           # instead of a raw file check.
           EXEC_RAN_1: ${{ needs.attempt-1.outputs.execution_ran }}
           EXEC_RAN_2: ${{ needs.attempt-2.outputs.execution_ran }}
+          # #69: the head-lineage probe below only sees OTHER workflow runs
+          # (it excludes $GITHUB_RUN_ID by design, #1228) — it can never see
+          # THIS run's own attempt jobs dying before they post. A same-run
+          # failure (e.g. plugin-install crash) was reaching the bottom
+          # "plugin legitimately skipped" pass with zero lineage to catch it
+          # on a PR's very first review run. Surfacing job `result` directly
+          # closes that hole without an API round-trip.
+          ATTEMPT_RESULT_1: ${{ needs.attempt-1.result }}
+          ATTEMPT_RESULT_2: ${{ needs.attempt-2.result }}
           # #133: anchors for the commit-free-rerun override below — when
           # each attempt job started, so the override can tell "no verdict
           # posted since this run began" from "no verdict ever".
@@ -528,6 +537,19 @@ jobs:
             if [ "$PR_STATE" != "OPEN" ]; then
               echo "::notice::PR is $PR_STATE and has no /code-review comment; nothing left to gate on a post-factum run. Treating as pass."
               exit 0
+            fi
+
+            # (0) THIS run's own attempt jobs (#69). Checked before the
+            # lineage probe below, which structurally cannot see it: a job
+            # that dies before the review step even starts (e.g. plugin
+            # marketplace/install failure) never gets a chance to post a
+            # verdict, and on a PR's first-ever review run there is no prior
+            # lineage entry to catch it either — that combination let
+            # PR #71 merge with a SUCCESS verdict despite both attempts
+            # failing outright.
+            if [ "$ATTEMPT_RESULT_1" = "failure" ] || [ "$ATTEMPT_RESULT_2" = "failure" ]; then
+              echo "::error::attempt-1=$ATTEMPT_RESULT_1 attempt-2=$ATTEMPT_RESULT_2 and no /code-review verdict comment exists. This run's own review attempt(s) failed before posting — the PR was never reviewed. Failing closed (#69); fix the failing attempt and re-review."
+              exit 1
             fi
 
             # Head-lineage probe. Intersect this workflow's runs with the PR's
