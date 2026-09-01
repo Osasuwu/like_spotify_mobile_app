@@ -112,5 +112,6 @@ if ($setupExit -ne 0) {
 }
 
 Write-Host ""
-Write-Step "Done. Launch the tray host with: like-spotify"
+Write-Step "Done. Launch the tray host with: like-spotify-gui"
+Write-Host "      (like-spotify also works but shows a console; -gui is the windowed twin)"
 Write-Host "      Default hotkey: Ctrl+Shift+Alt+W"

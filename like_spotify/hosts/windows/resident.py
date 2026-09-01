@@ -297,6 +297,13 @@ def _run_resident_host() -> int:
         _autostart_set(not _autostart_enabled())
         icon.update_menu()
 
+    def on_open_log(_icon, _item):
+        log_file = _common.CONFIG_FILE.parent / "startup.log"
+        try:
+            os.startfile(log_file)  # noqa: S606 — user-owned path, tray click only
+        except OSError:
+            _msgbox(f"No log file yet:\n\n{log_file}", title="Like Spotify — log")
+
     def on_quit(icon, _item):
         for t in (trigger, remove_trigger):
             if t is None:
@@ -316,6 +323,7 @@ def _run_resident_host() -> int:
         on_like=on_like,
         on_remove=on_remove,
         on_toggle_autostart=on_toggle_autostart,
+        on_open_log=on_open_log,
         on_quit=on_quit,
     )
 

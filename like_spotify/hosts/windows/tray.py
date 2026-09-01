@@ -23,6 +23,7 @@ def build_icon(
     on_like: Callable,
     on_remove: Callable,
     on_toggle_autostart: Callable,
+    on_open_log: Callable,
     on_quit: Callable,
 ):
     """Build the resident host's pystray.Icon and attach `feedback` to it."""
@@ -46,6 +47,7 @@ def build_icon(
             on_toggle_autostart,
             checked=lambda _item: _autostart_enabled(),
         ),
+        pystray.MenuItem("Open log", on_open_log),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", on_quit),
     ]

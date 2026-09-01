@@ -104,6 +104,15 @@ like-spotify remove-once # any OS: remove the current track from the archive pla
 like-spotify --config   # print config + token paths
 ```
 
+`like-spotify` is a console-subsystem executable, so any of the above
+briefly shows a terminal window. On Windows, a windowed twin is also
+installed — `like-spotify-gui` — that runs the exact same commands with no
+console at all. Autostart uses it automatically; if you trigger `like-once`
+/ `remove-once` from an external hotkey tool (AutoHotkey, a macro app, a
+Stream Deck, etc.), point it at `like-spotify-gui like-once` instead of
+`like-spotify like-once` to avoid the flash. (`--setup` / `--config` still
+need `like-spotify`, since they read from the terminal.)
+
 On Windows the tray host also binds a **second** global hotkey (default
 `Ctrl+Shift+Alt+Q`) that removes the currently-playing track from your
 Discover-Weekly archive playlist **without liking it** — for tracks you
