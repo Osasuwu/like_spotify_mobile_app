@@ -122,16 +122,33 @@ def _write_autostart_vbs() -> Path:
     return path
 
 
+def _gui_script_path() -> Path | None:
+    """The `like-spotify-gui` launcher stub beside `sys.executable`, if any.
+
+    Installed by pip/pipx from the `[project.gui-scripts]` entry point — a
+    genuinely windowed-subsystem binary, not a console interpreter with its
+    window hidden after the fact. Using it sidesteps the pythonw/venv-stub
+    SW_HIDE-forwarding bug entirely (`_venv_bypass` below is now only a
+    fallback for installs predating this entry point).
+    """
+    candidate = Path(sys.executable).with_name("like-spotify-gui.exe")
+    return candidate if candidate.exists() else None
+
+
 def _autostart_target() -> str:
     """Registry Run value: launch the tray fully hidden at login.
 
-    A frozen windowed exe has no console, so it's launched directly. For the
-    source / pipx install we route through `wscript.exe` + a hidden-launch
-    VBScript so the console interpreter the venv redirector picks at login
-    never shows a window.
+    A frozen windowed exe has no console, so it's launched directly.
+    Otherwise prefer the `like-spotify-gui` shim (see `_gui_script_path`) —
+    it needs no VBScript wrapper since it never has a console to hide. Only
+    an install without that shim falls back to `wscript.exe` + the
+    hidden-launch VBScript.
     """
     if getattr(sys, "frozen", False):
         return _resident_launch_command()
+    gui_script = _gui_script_path()
+    if gui_script is not None:
+        return f'"{gui_script}"'
     vbs = _write_autostart_vbs()
     return f'wscript.exe //B //Nologo "{vbs}"'
 

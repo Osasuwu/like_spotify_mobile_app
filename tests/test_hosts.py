@@ -209,6 +209,38 @@ def test_venv_bypass_none_outside_a_venv(tmp_path) -> None:
     assert autostart._venv_bypass(exe) is None
 
 
+def test_autostart_target_prefers_gui_script_shim(tmp_path, monkeypatch) -> None:
+    # A `like-spotify-gui` shim beside the interpreter is windowed-subsystem
+    # already — no VBScript/pythonw-bypass indirection needed or wanted.
+    monkeypatch.setattr(
+        "like_spotify.hosts._common.CONFIG_FILE", tmp_path / "config.json"
+    )
+    monkeypatch.setattr(autostart.sys, "frozen", False, raising=False)
+    scripts = tmp_path / "Scripts"
+    scripts.mkdir()
+    python_exe = scripts / "python.exe"
+    python_exe.write_bytes(b"")
+    gui_exe = scripts / "like-spotify-gui.exe"
+    gui_exe.write_bytes(b"")
+    monkeypatch.setattr(autostart.sys, "executable", str(python_exe), raising=False)
+
+    target = autostart._autostart_target()
+
+    assert target == f'"{gui_exe}"'
+    assert "wscript" not in target
+    assert not (tmp_path / "autostart_hidden.vbs").exists()
+
+
+def test_gui_script_path_none_when_shim_missing(tmp_path, monkeypatch) -> None:
+    scripts = tmp_path / "Scripts"
+    scripts.mkdir()
+    python_exe = scripts / "python.exe"
+    python_exe.write_bytes(b"")
+    monkeypatch.setattr(autostart.sys, "executable", str(python_exe), raising=False)
+
+    assert autostart._gui_script_path() is None
+
+
 def test_autostart_target_frozen_launches_exe_directly(monkeypatch) -> None:
     # A frozen windowed exe has no console — no VBScript indirection needed.
     monkeypatch.setattr(autostart.sys, "frozen", True, raising=False)

@@ -37,6 +37,13 @@ dev = [
 [project.scripts]
 like-spotify = "like_spotify.hosts:main"
 
+[project.gui-scripts]
+# Windowed-subsystem twin of `like-spotify`, for launches that must never
+# show a console: the login autostart target and any external hotkey tool
+# invoking `like-once`/`remove-once`. `--setup`/`--config` still need
+# `like-spotify` (console) since they read from stdin.
+like-spotify-gui = "like_spotify.hosts:main"
+
 [project.urls]
 Repository = "https://github.com/Osasuwu/like_spotify_mobile_app"
 Issues    = "https://github.com/Osasuwu/like_spotify_mobile_app/issues"
