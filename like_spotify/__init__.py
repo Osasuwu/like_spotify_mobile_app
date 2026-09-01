@@ -5,4 +5,4 @@ that wires the default-flavor extensions (tray_hotkey_trigger + spotify).
 Storage and PostLikeActions land in #22 / #23.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.3"

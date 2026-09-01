@@ -1,0 +1,97 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+No prebuilt APK is attached to any release — build your own with your own
+Spotify/Supabase credentials (see [README](README.md)).
+
+## [Unreleased]
+
+## [1.0.3] - 2026-09-01
+
+### Fixed
+
+- **Desktop: no more console flashes.** The packaged entry point is now a
+  windowed `gui-scripts` entry, so the tray host no longer spawns a visible
+  console window on launch or on each hotkey press ([#68](https://github.com/Osasuwu/like_spotify_mobile_app/issues/68)).
+
+### Changed
+
+- Repo baseline synced — CI workflows, PR body check, and owner-queue guard
+  brought in line with the shared template ([#65](https://github.com/Osasuwu/like_spotify_mobile_app/pull/65)).
+
+### Documentation
+
+- Added `CODE_OF_CONDUCT.md`, `SECURITY.md`, this changelog, a feature-request
+  issue template, and README status badges; corrected a stale CI claim in
+  `CONTRIBUTING.md` ([#70](https://github.com/Osasuwu/like_spotify_mobile_app/issues/70)).
+
+## [1.0.2] - 2026-08-13
+
+Desktop crash fix plus the close-out of a five-finding architecture review pass.
+No user-facing behavior changes beyond the crash fix.
+
+### Fixed
+
+- **Tray beep crash.** `winsound` rejects `SND_MEMORY | SND_ASYNC` outright, so
+  every like/error beep on desktop crashed with
+  `RuntimeError: Cannot play asynchronously from memory`. Dropped the redundant
+  `SND_ASYNC` flag — `_beep` already runs on its own daemon thread.
+- Like-cooldown gate and recorder now share one store, removing a fragile
+  pre/post-action coupling that risked silent desync between the dedup check and
+  the record write ([#57](https://github.com/Osasuwu/like_spotify_mobile_app/issues/57)).
+
+### Changed
+
+- `hosts/windows.py` split into a package — tray feedback, tone synthesis,
+  autostart, and resident wiring each got their own module instead of one
+  687-line grab-bag ([#55](https://github.com/Osasuwu/like_spotify_mobile_app/issues/55)).
+- `hosts/_common.py` decomposed into a builder registry; the interactive
+  `--setup` wizard extracted to its own module. Adding an extension is now one
+  function plus one registry entry, not a new `if`/`elif` branch
+  ([#58](https://github.com/Osasuwu/like_spotify_mobile_app/issues/58)).
+- `PlaylistCapableProvider` protocol replaces three independent duck-typing
+  checks with one structural-typing `Protocol`, applied consistently across the
+  remove-from-playlist pipeline, archive-remove action, and follow-artist action
+  ([#59](https://github.com/Osasuwu/like_spotify_mobile_app/issues/59)).
+
+### Added
+
+- Regression tests for `TrayFeedback._beep` / `_synth_tone`, covering the crash
+  above ([#56](https://github.com/Osasuwu/like_spotify_mobile_app/issues/56)).
+
+## [1.0.1] - 2026-08-06
+
+### Added
+
+- **Like cooldown / dedup.** A 10-minute (configurable) cooldown against
+  accidental repeat-likes on the same track — two presses seconds apart during
+  one listen now count as one like instead of two.
+  - *Android*: `RuleConfig.likeCooldownEnabled` / `likeCooldownMinutes`
+    (default 10). Checked before liking, recorded only after the real Spotify
+    like call succeeds — mirrored in the native Kotlin WorkManager background
+    path.
+  - *Desktop*: `like_spotify/extensions/like_cooldown`, a pre/post action pair
+    backed by a local JSON store under `~/.like_spotify/`. No Storage or network
+    round-trip; same 10-minute default.
+
+## [1.0.0] - 2026-08-05
+
+First tagged release.
+
+### Added
+
+- Android and Windows media-button triggers for Spotify like/unlike, playlist
+  archiving, best-of promotion, and artist auto-follow.
+- Desktop tray feedback tone — synthesized, distinctive, volume-configurable
+  via `trigger.feedback_volume` in `~/.like_spotify/config.json`.
+- Matching Android feedback-volume setting in the Trigger configuration screen.
+
+[Unreleased]: https://github.com/Osasuwu/like_spotify_mobile_app/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/Osasuwu/like_spotify_mobile_app/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/Osasuwu/like_spotify_mobile_app/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/Osasuwu/like_spotify_mobile_app/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/Osasuwu/like_spotify_mobile_app/releases/tag/v1.0.0

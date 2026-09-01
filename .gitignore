@@ -66,3 +66,6 @@ tools/dist/
 .venv/
 .venv-*/
 venv/
+
+# Gradle build output (was accidentally tracked, see #70)
+android/build/

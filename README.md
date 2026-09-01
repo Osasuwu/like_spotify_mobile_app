@@ -1,5 +1,11 @@
 # Like Spotify
 
+[![CI](https://github.com/Osasuwu/like_spotify_mobile_app/actions/workflows/ci.yml/badge.svg)](https://github.com/Osasuwu/like_spotify_mobile_app/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Osasuwu/like_spotify_mobile_app)](https://github.com/Osasuwu/like_spotify_mobile_app/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
+
 **One-button Spotify automation across your phone and laptop.** Like the currently-playing track with a headset pause-play pattern (Android) or a global keyboard hotkey (Windows tray; macOS / Linux CLI). On top of "like", a small rule engine runs per like: remove from an archive playlist (Discover Weekly clean-up), promote a track to a "best-of" playlist when you've liked it N times across devices, auto-follow an artist after N liked tracks. Counters live in Supabase or Google Sheets so phone + laptop see the same numbers.
 
 The desktop side is a **pluggable framework**, not a single tool. Five extension points — `Trigger`, `MusicProvider`, `Storage`, `PreLikeAction`, `PostLikeAction` — discover at startup via a filesystem convention (each extension is a folder with a `manifest.json` and a `TRIGGER` / `MUSIC_PROVIDER` / `STORAGE` / `PRE_LIKE_ACTION` / `POST_LIKE_ACTION` factory). Drop a folder, restart, your code runs in the like pipeline. See [CONTRIBUTING.md](CONTRIBUTING.md) for the plugin-author guide.
@@ -208,6 +214,21 @@ Android (Flutter + Kotlin)          Desktop (Python framework)
 | Storage backend | (Supabase only) | `~/.like_spotify/config.json` → `storage.backend` (`supabase` / `sheets` / `none`) |
 | Google Sheets tokens | n/a | `~/.like_spotify/google_token.json` (refreshed automatically) |
 | Best-of / follow | In-app UI | `~/.like_spotify/config.json` → `actions.{promote_to_best_of,follow_artist}` |
+
+## Contributing
+
+Contributions are welcome — the desktop side is a plugin framework precisely so
+that other people's triggers, providers, storages, and actions can live in it.
+
+- [**CONTRIBUTING.md**](CONTRIBUTING.md) — repo layout, the five extension
+  points with code, the add-an-extension checklist, and how to run the tests.
+  It also lists what's known to be easy to land.
+- [**Good first issues**](https://github.com/Osasuwu/like_spotify_mobile_app/labels/good%20first%20issue)
+  · [**Help wanted**](https://github.com/Osasuwu/like_spotify_mobile_app/labels/help%20wanted)
+- [**CODE_OF_CONDUCT.md**](CODE_OF_CONDUCT.md)
+- [**SECURITY.md**](SECURITY.md) — please report vulnerabilities privately, not
+  as a public issue.
+- [**CHANGELOG.md**](CHANGELOG.md)
 
 ## License
 

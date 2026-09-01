@@ -49,11 +49,11 @@ body:
     attributes:
       label: "Area"
       options:
-        - "area:skills"
-        - "area:config"
-        - "area:infrastructure"
-        - "area:quality"
+        - "domain:android"
+        - "domain:desktop"
+        - "domain:backend"
         - "area:docs"
+        - "area:quality"
     validations:
       required: true
 
