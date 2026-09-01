@@ -382,8 +382,11 @@ pytest tests/test_pipeline.py -k storage   # one slice
 flutter test            # Android tests
 ```
 
-CI (`.github/workflows/ci.yml`) currently runs only the Flutter side on
-push/PR to `main`. Adding a Python job is itself a good first PR.
+CI (`.github/workflows/ci.yml`) runs on push/PR to `main`: a `test` job
+(Flutter analyze + `flutter test`, ubuntu) and a `pytest` job (windows, since
+the default host is Windows-bound). A PR must also carry a linked issue in its
+body (`Closes #123`) or the `[no-issue]` marker for trivial drive-bys — see
+`.github/workflows/pr-body-check.yml`.
 
 ## Conventions
 

@@ -1,0 +1,74 @@
+name: "Feature Request"
+description: "Suggest a new capability, extension, or improvement."
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. If you're proposing a new **extension** (a `Trigger`,
+        `MusicProvider`, `Storage`, `PreLikeAction`, or `PostLikeAction`), skim
+        [CONTRIBUTING.md](https://github.com/Osasuwu/like_spotify_mobile_app/blob/main/CONTRIBUTING.md)
+        first — the seam you need may already exist, in which case this is a PR
+        rather than a request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem"
+      description: "What are you trying to do that the app doesn't let you do today?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "Proposed Solution"
+      description: "What should happen instead? Rough is fine."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: "Area"
+      options:
+        - "domain:android — Flutter app / Kotlin service"
+        - "domain:desktop — Python package (tray, hotkey, CLI)"
+        - "domain:backend — Supabase / Google Sheets storage"
+        - "area:docs — README, CONTRIBUTING, design docs"
+        - "area:quality — tests, CI"
+        - "not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: extension_point
+    attributes:
+      label: "Extension point (desktop only)"
+      description: "If this is a desktop plugin idea, which seam does it fit?"
+      options:
+        - "n/a"
+        - "Trigger"
+        - "MusicProvider"
+        - "Storage"
+        - "PreLikeAction"
+        - "PostLikeAction"
+        - "Host (new platform)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives considered"
+      description: "Workarounds you tried, or other projects that solve this differently."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: "Contribution"
+      options:
+        - label: "I'd be willing to open a PR for this"
+          required: false

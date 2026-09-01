@@ -2,20 +2,42 @@
 
 ## What this is
 
-Android app (Flutter + Kotlin) that listens for media button patterns (e.g. pause-play) and triggers Spotify actions: like current track, manage playlists, follow artists.
+Two halves that share Spotify state and a cross-device like counter:
 
-Repo: `Osasuwu/like_spotify_mobile_app`
+- **Android** (Flutter + Kotlin, `lib/` + `android/`) — listens for media button
+  patterns (e.g. pause-play) and triggers Spotify actions: like current track,
+  manage playlists, follow artists.
+- **Desktop** (Python, `like_spotify/`) — a *pluggable framework* with five
+  extension points (`Trigger`, `MusicProvider`, `Storage`, `PreLikeAction`,
+  `PostLikeAction`) discovered at startup via a `manifest.json` filesystem
+  convention. Default flavor: Windows tray host + global hotkey; `_stub.py` CLI
+  fallback on macOS/Linux.
 
-**Status**: inactive — lower priority than redrobot and jarvis. No advanced protocols (PM dispatch, parallel work) needed. Standard Claude Code practices apply.
+Repo: `Osasuwu/like_spotify_mobile_app` — **public**. Public repo = production
+quality: no local hacks, no "works for me".
+
+**Status**: feature-complete through v1.0.3, maintenance mode — lower priority
+than redrobot and jarvis. No advanced protocols (PM dispatch, parallel work)
+needed. Standard Claude Code practices apply.
 
 ## Tech stack
 
+### Android
 - **Framework**: Flutter (Dart) — Android-only, other platforms are stubs
 - **State management**: Riverpod (`StateNotifier<AppState>`)
 - **Architecture**: Clean Architecture — domain / data / presentation layers
 - **Native**: Kotlin — foreground service, MediaSession, broadcast receivers
 - **Auth**: Spotify OAuth 2.0 (PKCE flow)
 - **Storage**: SharedPreferences + FlutterSecureStorage (tokens)
+
+### Desktop
+- **Language**: Python 3.11+, packaged via `pyproject.toml` (`like-spotify`)
+- **Architecture**: ABCs in `core/`, implementations in `extensions/`, OS-bound
+  side effects confined to `hosts/<platform>/`
+- **Counters**: Supabase (Postgres RPC) or Google Sheets, selected by
+  `storage.backend` in `~/.like_spotify/config.json`
+- **Config/tokens**: `~/.like_spotify/` (`config.json`, `spotify_token.json`,
+  `google_token.json`)
 
 ## Architecture
 
@@ -34,6 +56,19 @@ lib/
     ├── state/         # AppController (StateNotifier), providers
     ├── screens/       # 7 screens (main, trigger config, logs, etc.)
     └── widgets/       # Reusable UI components
+
+like_spotify/
+├── core/                 # Pure interfaces — no I/O, no platform code
+├── extensions/           # Pluggable impls (spotify, tray_hotkey_trigger,
+│                         #   supabase_storage, google_sheets_storage,
+│                         #   archive_remove, promote_to_best_of,
+│                         #   follow_artist, like_cooldown)
+├── hosts/
+│   ├── windows/          # Resident tray + global hotkey + autostart
+│   ├── _stub.py          # macOS / Linux CLI fallback (like-once only)
+│   ├── _common.py        # Config I/O + storage/action builder registries
+│   └── _setup.py         # Interactive `--setup` wizard
+└── samples/              # Alt-flavor examples
 
 android/app/src/main/kotlin/.../
 ├── MediaButtonForegroundService.kt  # Background service
@@ -54,6 +89,10 @@ flutter analyze           # Lint check
 flutter test              # Run all tests
 flutter test --coverage   # Run tests with coverage
 flutter build apk --release --dart-define-from-file=.env            # Build APK (reads .env)
+
+pip install -e .[dev]     # Desktop: install with dev extras
+pytest                    # Desktop: run Python tests
+like-spotify --setup      # Desktop: interactive config wizard
 ```
 
 ## Key files
@@ -67,6 +106,10 @@ flutter build apk --release --dart-define-from-file=.env            # Build APK 
 | Repository interfaces | `lib/domain/repositories/` |
 | Android service | `android/.../MediaButtonForegroundService.kt` |
 | Constants | `lib/core/app_constants.dart` |
+| Desktop interfaces | `like_spotify/core/` |
+| Desktop pipeline | `like_spotify/core/pipeline.py` |
+| Desktop builder registries | `like_spotify/hosts/_common.py` |
+| Setup wizard | `like_spotify/hosts/_setup.py` |
 
 ## Testing
 
@@ -76,6 +119,16 @@ flutter build apk --release --dart-define-from-file=.env            # Build APK 
 - Data/state layer tests mock repository interfaces with `mocktail`
 - Run: `flutter test`
 
+Desktop:
+
+- Framework: `pytest` + `pytest-asyncio`, tests under `tests/`
+- `Storage` impls join the parametrised contract suite in
+  `tests/test_storage_contract.py` — seven shared invariants for free
+- Run: `pytest`
+
+CI (`.github/workflows/ci.yml`) runs both: a `test` job (Flutter, ubuntu) and a
+`pytest` job (Windows).
+
 ## Spotify setup
 
 Requires a Spotify Developer App:
@@ -83,3 +136,17 @@ Requires a Spotify Developer App:
 2. Set redirect URI: `likespotify://auth-callback`
 3. Copy `.env.example` to `.env` and fill in values
 4. Build with `--dart-define-from-file=.env`
+
+## OSS conventions
+
+Public repo — outside contributors are a real audience:
+
+- `CONTRIBUTING.md` is the plugin-author guide; keep it true when seams change.
+- `CHANGELOG.md` (Keep a Changelog) gets an `Unreleased` entry per user-facing
+  change; release notes are derived from it.
+- Security problems go through GitHub private advisories, never a public issue
+  (`SECURITY.md`).
+- PRs need a linked issue in the body (`Closes #N`) or the `[no-issue]` marker —
+  enforced by `.github/workflows/pr-body-check.yml`.
+- Issue labels use the `domain:android` / `domain:desktop` / `domain:backend`
+  axis plus `area:docs` / `area:quality`.
